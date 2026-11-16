@@ -1,4 +1,4 @@
-"""Сделка после торгового дня: оплата, подтверждение, спор, сроки и штрафы.
+"""Сделка на бирже: оплата, подтверждение, спор, сроки и штрафы.
 
 Бот никогда не переносит акции, пока продавец не подтвердил получение денег
 или админ не решил спор в пользу переноса.
@@ -185,9 +185,9 @@ async def process_deadlines(ctx: Ctx) -> None:
         Trade.status == TS.AWAITING_PAYMENT, Trade.pay_deadline <= ctx.now).with_for_update())).scalars().all()
     for t in overdue_pay:
         await _cancel(ctx, t, None, "покупатель не оплатил вовремя")
-        # одна заявка может разбиться на несколько сделок — балл один за торговый день
+        # одна заявка может исполниться несколькими сделками — балл один за заявку
         already = (await ctx.s.execute(select(Penalty.id).join(Trade, Trade.id == Penalty.trade_id).where(
-            Penalty.user_id == t.buyer_id, Penalty.points == 1, Trade.session_id == t.session_id))).first()
+            Penalty.user_id == t.buyer_id, Penalty.points == 1, Trade.buy_order_id == t.buy_order_id))).first()
         if not already:
             await users.add_penalty(ctx, t.buyer_id, 1, f"не оплачена сделка №{t.id}", trade_id=t.id)
     overdue_conf = (await ctx.s.execute(select(Trade).where(

@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, ChatMemberUpdated, ErrorEvent, Message
 
-from ..core import admin, exits, gifts, orders, placements, registry, settings, trades, trading, users
+from ..core import admin, exits, gifts, market, orders, placements, registry, settings, trades, users
 from ..core.context import App, Button
 from ..core.errors import DomainError
 from ..models import Role, Trade, TradeStatus, User
@@ -89,7 +89,8 @@ ORDER_STATUS = {"active": "активна", "partial": "исполнена ча�
 TRADE_STATUS = {"awaiting_payment": "ждёт оплаты", "awaiting_confirmation": "ждёт подтверждения",
                 "completed": "завершена", "cancelled": "отменена", "disputed": "спор"}
 
-HELP = ("Команды:\n/placement — купить SBAID на размещении\n/buy, /sell — заявка на рынке\n"
+HELP = ("Команды:\n/placement — купить SBAID на размещении\n/market — биржа: цена и стакан\n"
+        "/buy, /sell — купить или продать на бирже\n"
         "/orders — мои заявки\n/trades — мои сделки\n/portfolio — портфель\n/gift — подарить SBAID\n"
         "/exit — выйти из клуба\n/rules — правила и оферта\n/linked — аккаунты, связанные с основателем\n"
         "/registry — публичный реестр")
@@ -113,8 +114,8 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
     await m.answer(
         f"Это клуб SBAID. Основатель — {c.founder_name}. 1 SBAID = 1 голос в его решениях: "
         f"вы решаете, он делает.\n\n"
-        f"SBAID продаются на размещениях, а раз в неделю участники могут купить и продать их друг "
-        f"другу. Новости и итоги торгов выходят в канале {channel}. После первой покупки бот "
+        f"SBAID продаются на размещениях, а на бирже бота участники в любой момент покупают и продают их "
+        f"друг другу, цена меняется после каждой сделки. Новости и итоги торгов выходят в канале {channel}. После первой покупки бот "
         f"пришлёт личную ссылку в закрытую группу «{c.group_name}».\n\n"
         "SBAID — единица участия и голоса в клубе. Это не ценная бумага, не доля в имуществе "
         "и не инвестиция, дохода она не гарантирует.\n\n"
@@ -247,7 +248,7 @@ async def order_start(m: Message, command: CommandObject, user: User, app: App, 
         users.require_member(u)
         if users.founder_side(u):
             raise DomainError("Основатель и связанные с ним аккаунты не торгуют на рынке между участниками")
-        ref = await orders.reference_price(ctx)
+        q = await market.quote(ctx)
         h = await registry.holding(ctx, u.id)
     await state.update_data(side=side)
     if side == "sell" and not user.payout_details_enc:
@@ -255,8 +256,8 @@ async def order_start(m: Message, command: CommandObject, user: User, app: App, 
         return await m.answer("Куда принимать оплату? Напишите телефон для перевода по СБП. "
                               "Его увидит только покупатель из вашей сделки.")
     await state.set_state(OrderFlow.qty)
-    hint = f"Свободно SBAID: {h.total - h.blocked}. " if side == "sell" else ""
-    await m.answer(f"Заявка на {SIDE[side]}у. Референсная цена: {rub(ref)}. {hint}Сколько SBAID?")
+    hint = f"\nСвободно SBAID: {h.total - h.blocked}." if side == "sell" else ""
+    await m.answer(f"Заявка на {SIDE[side]}у. {market.quote_line(q)}\n{best_line(q)}{hint}\nСколько SBAID?")
 
 
 @router.message(OrderFlow.payout_phone, F.text, ~F.text.startswith("/"))
@@ -275,22 +276,38 @@ async def payout_bank(m: Message, user: User, app: App, state: FSMContext):
     await m.answer("Реквизиты сохранены (в зашифрованном виде). Сколько SBAID продаёте?")
 
 
+def best_line(q: market.Quote) -> str:
+    ask = rub(q.best_ask) if q.best_ask else "нет"
+    bid = rub(q.best_bid) if q.best_bid else "нет"
+    return f"Лучшая продажа в стакане: {ask}, лучшая покупка: {bid}."
+
+
 @router.message(OrderFlow.qty, F.text, ~F.text.startswith("/"))
-async def order_qty(m: Message, state: FSMContext):
+async def order_qty(m: Message, app: App, state: FSMContext):
     await state.update_data(qty=parse_int(m.text))
     data = await state.get_data()
+    async with app.tx() as ctx:
+        q = await market.quote(ctx)
     await state.set_state(OrderFlow.price)
-    await m.answer("Минимальная цена за 1 SBAID, ₽?" if data["side"] == "sell" else "Максимальная цена за 1 SBAID, ₽?")
+    if data["side"] == "sell":
+        now = (f"Чтобы продать сразу, укажите цену не выше {rub(q.best_bid)}. " if q.best_bid else "")
+        await m.answer(f"{now}Минимальная цена за 1 SBAID, ₽?")
+    else:
+        now = (f"Чтобы купить сразу, укажите цену не ниже {rub(q.best_ask)}. " if q.best_ask else "")
+        await m.answer(f"{now}Максимальная цена за 1 SBAID, ₽?")
+
+
+ORDER_DAYS = {1: "1 день", 7: "Неделя", 30: "30 дней"}
 
 
 @router.message(OrderFlow.price, F.text, ~F.text.startswith("/"))
 async def order_price(m: Message, app: App, state: FSMContext):
     await state.update_data(price=parse_rub(m.text))
     async with app.tx() as ctx:
-        max_weeks = await settings.get(ctx, "order_max_weeks")
-    row = [Button("До ближайшего торгового дня", "ord:new:1")]
-    more = [Button(f"{w} нед.", f"ord:new:{w}") for w in range(2, max_weeks + 1)]
-    await m.answer("На какой срок заявка?", reply_markup=markup([row, more] if more else [row]))
+        max_days = await settings.get(ctx, "order_max_days")
+    row = [Button(label, f"ord:new:{d}") for d, label in ORDER_DAYS.items() if d <= max_days]
+    await m.answer("Что не исполнится сразу, будет ждать в стакане. Сколько держать заявку?",
+                   reply_markup=markup([row]))
 
 
 @router.callback_query(F.data.startswith("ord:new:"))
@@ -298,13 +315,18 @@ async def order_create(c: CallbackQuery, user: User, app: App, state: FSMContext
     data = await state.get_data()
     if not {"side", "qty", "price"} <= data.keys():
         raise DomainError("Начните заново: /buy или /sell")
-    weeks = int(c.data.split(":")[2])
+    days = int(c.data.split(":")[2])
     async with app.tx() as ctx:
-        o = await orders.create(ctx, await users.get(ctx, user.id), data["side"], data["qty"], data["price"], weeks)
+        o = await orders.create(ctx, await users.get(ctx, user.id), data["side"], data["qty"], data["price"], days)
     await state.clear()
-    await c.message.edit_text(f"Заявка №{o.id} принята: {SIDE[o.side]} {o.shares} SBAID, цена "
-                              f"{'не ниже' if o.side == 'sell' else 'не выше'} {rub(o.limit_price)}, "
-                              f"действует до {fmt_msk(o.expires_at)}. Отменить можно в /orders до отсечки.")
+    text = (f"Заявка №{o.id}: {SIDE[o.side]} {o.shares} SBAID, цена "
+            f"{'не ниже' if o.side == 'sell' else 'не выше'} {rub(o.limit_price)}.")
+    if o.new_trades:
+        n = len(o.new_trades)
+        text += f"\nИсполнено сразу: {o.filled} SBAID в {n} сделк{'е' if n == 1 else 'ах'}, подробности ниже."
+    if o.remaining:
+        text += f"\nОстаток {o.remaining} SBAID ждёт в стакане до {fmt_msk(o.expires_at)}. Отменить: /orders."
+    await c.message.edit_text(text)
     await c.answer()
 
 
@@ -312,14 +334,19 @@ async def order_create(c: CallbackQuery, user: User, app: App, state: FSMContext
 async def my_orders(m: Message, user: User, app: App):
     async with app.tx() as ctx:
         rows = await orders.active_orders(ctx, user.id)
-        cutoff = await orders.next_cutoff(ctx)
     if not rows:
-        return await m.answer(f"Активных заявок нет. Ближайший торговый день: {fmt_msk(cutoff)}.")
+        return await m.answer("Активных заявок нет. Цена и стакан: /market.")
     for o in rows:
         await m.answer(f"№{o.id}: {SIDE[o.side]} {o.shares} SBAID по {rub(o.limit_price)}, исполнено {o.filled}, "
                        f"{ORDER_STATUS[o.status]}, до {fmt_msk(o.expires_at)}",
                        reply_markup=markup([[Button("Отменить", f"ord:cancel:{o.id}")]]))
-    await m.answer(f"Ближайший торговый день: {fmt_msk(cutoff)}.")
+
+
+@router.message(Command("market"))
+async def market_view(m: Message, app: App):
+    async with app.tx() as ctx:
+        text = await market.market_text(ctx)
+    await m.answer(text)
 
 
 @router.callback_query(F.data.startswith("ord:cancel:"))
@@ -465,12 +492,13 @@ async def exit_start(m: Message, user: User, app: App, state: FSMContext):
         u = await users.get(ctx, user.id)
         users.require_member(u)
         o = await exits.options(ctx, u)
-    market = ("Выйти из клуба по рыночной цене можно в любой момент: подайте заявку на продажу (/sell), "
-              "и на ближайшем торговом дне ваши SBAID купят другие участники. Деньги вам переведёт покупатель.")
+    via_market = ("Выйти из клуба по рыночной цене можно в любой момент: продайте SBAID на бирже (/sell). "
+                  "Если в стакане есть покупатели, сделка пройдёт сразу; деньги вам переведёт покупатель. "
+                  "Цена и стакан: /market.")
     if o["redeemable"] == 0:
-        return await m.answer(market)
+        return await m.answer(via_market)
     await state.set_state(ExitFlow.qty)
-    await m.answer(f"{market}\n\nЕсли вы отказываетесь от участия и хотите вернуть основателю SBAID, купленные на "
+    await m.answer(f"{via_market}\n\nЕсли вы отказываетесь от участия и хотите вернуть основателю SBAID, купленные на "
                    f"размещении, можно подать заявление на возврат — до {o['redeemable']} SBAID. Основатель "
                    f"вернёт не больше уплаченного за вычетом фактических расходов. Погашенные SBAID "
                    f"возвращаются в казну и перестают голосовать.\n\nСколько SBAID вернуть? "
@@ -511,7 +539,6 @@ ADMIN_HELP = ("Админ-команды:\n"
               "/link @ник, /unlink @ник — связанные аккаунты\n"
               "/observer @ник, /unobserver @ник — наблюдатели\n"
               "/settings; /set <ключ> <значение>\n"
-              "/tradingday — провести сорвавшийся торговый день\n"
               "/export registry|journal|public\n"
               "/broadcast <текст>\n"
               "/adjust @ник <±SBAID> <причина>\n"
@@ -685,16 +712,6 @@ async def set_setting(m: Message, command: CommandObject, user: User, app: App):
     async with app.tx() as ctx:
         sc = await settings.change(ctx, user.id, key, parse_int(value))
     await m.answer(f"Изменение опубликовано в канале и вступит в силу {fmt_msk(sc.effective_at)}.")
-
-
-@router.message(Command("tradingday"))
-async def trading_day(m: Message, user: User, app: App):
-    async with app.tx() as ctx:
-        cutoff = await trading.last_cutoff(ctx)
-        sess = await trading.run(ctx, cutoff, actor=await users.get(ctx, user.id))
-    await m.answer(f"Торговый день {fmt_msk(cutoff)}: " + (
-        f"цена {rub(sess.price)}, объём {sess.volume}, сделок {sess.trades_count}." if sess.status == "done"
-        else "не состоялся."))
 
 
 @router.message(Command("export"))

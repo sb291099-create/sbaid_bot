@@ -4,7 +4,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, text
 
-from torgi.core import admin, exits, gifts, orders, placements, registry, trades, trading, users
+from torgi.core import admin, exits, gifts, market, orders, placements, registry, trades, users
 from torgi.core.errors import DomainError
 from torgi.models import AuditLog, Holding, PriceHistory, Refund, Trade, TradeStatus as TS
 
@@ -81,42 +81,62 @@ async def place_example_orders(app, p):
     return ids
 
 
-async def run_day(app):
-    async with app.tx() as ctx:
-        cutoff = await orders.next_cutoff(ctx)
-    app.clock_obj.now = cutoff
-    async with app.tx() as ctx:
-        return await trading.run(ctx, cutoff)
-
-
-async def test_example_trading_day(app):
+async def test_example_live_exchange(app):
+    """Заявки из примера ТЗ, поданные по очереди, исполняются сразу по цене заявки из стакана."""
     p = await setup_market(app)
-    await place_example_orders(app, p)
-    sess = await run_day(app)
-    assert sess.status == "done" and sess.price == 125 * R and sess.volume == 50 and sess.trades_count == 4
+    ids = await place_example_orders(app, p)
     async with app.tx() as ctx:
         rows = (await ctx.s.execute(select(Trade).order_by(Trade.id))).scalars().all()
         name = {u.id: n for n, u in p.items()}
-        assert [(name[t.buyer_id], name[t.seller_id], t.shares, t.amount // R) for t in rows] == [
-            ("Д", "А", 10, 1250), ("Е", "А", 10, 1250), ("Е", "Б", 20, 2500), ("Ж", "Б", 10, 1250)]
+        assert [(name[t.buyer_id], name[t.seller_id], t.shares, t.price // R) for t in rows] == [
+            ("Д", "А", 10, 110), ("Е", "А", 10, 110), ("Е", "Б", 20, 125), ("Ж", "Б", 10, 125)]
+        assert all(t.pay_deadline == t.created_at + timedelta(hours=24) for t in rows)
+        # цена SBAID — цена последней сделки
         assert (await orders.reference_price(ctx)) == 125 * R
-    # акции не перенесены до подтверждения, но заблокированы у продавцов
+        from torgi.models import Order
+        st = {n: ((o := await ctx.s.get(Order, i)).status, o.filled) for n, i in ids.items()}
+        assert st == {"А": ("filled", 20), "Б": ("filled", 30), "В": ("active", 0), "Г": ("active", 0),
+                      "Д": ("filled", 10), "Е": ("filled", 30), "Ж": ("partial", 10), "З": ("active", 0)}
+        asks, bids = await market.book(ctx)
+        assert [(l.price // R, l.shares) for l in asks] == [(140, 25), (160, 15)]
+        assert [(l.price // R, l.shares) for l in bids] == [(125, 10), (115, 40)]
+        q = await market.quote(ctx)
+        assert (q.last, q.best_bid, q.best_ask, q.trades_24h, q.volume_24h) == (125 * R, 125 * R, 140 * R, 4, 50)
+        assert round(q.change_pct) == 25  # от цены размещения 100 ₽
+    # SBAID не перенесены до подтверждения, но заблокированы у продавцов
     assert await shares_of(app, p["А"]) == (20, 20)
     assert await shares_of(app, p["Д"]) == (0, 0)
+    assert any("вы покупаете 10 SBAID по 110 ₽" in m for m in app.notifier.to(p["Д"].id))
+    assert any("вы продаёте 10 SBAID по 110 ₽" in m for m in app.notifier.to(p["А"].id))
     await invariant(app)
 
 
-async def test_failed_day_keeps_price(app):
+async def test_price_then_time_priority(app):
+    p = await setup_market(app)
+    for name, price in (("А", 120), ("Б", 120), ("В", 118)):
+        app.clock_obj.now += timedelta(seconds=1)
+        async with app.tx() as ctx:
+            await orders.create(ctx, await users.get(ctx, p[name].id), "sell", 10, price * R)
+    async with app.tx() as ctx:
+        o = await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 25, 130 * R)
+        name = {u.id: n for n, u in p.items()}
+        # сначала лучшая цена (В, 118 ₽), затем при равной цене — более ранняя заявка (А раньше Б)
+        assert [(name[t.seller_id], t.shares, t.price // R) for t in o.new_trades] == [
+            ("В", 10, 118), ("А", 10, 120), ("Б", 5, 120)]
+        assert o.status == "filled"
+
+
+async def test_no_cross_rests_in_book(app):
     p = await setup_market(app)
     async with app.tx() as ctx:
-        await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 10, 190 * R)
-        await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 10, 50 * R)
         before = await orders.reference_price(ctx)
-    sess = await run_day(app)
-    assert sess.status == "failed" and sess.price is None
+        s = await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 10, 190 * R)
+        b = await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 10, 50 * R)
+        assert s.new_trades == [] and b.new_trades == []
     async with app.tx() as ctx:
         assert await orders.reference_price(ctx) == before
-        assert (await ctx.s.execute(select(PriceHistory).where(PriceHistory.source == "session"))).first() is None
+        assert (await ctx.s.execute(select(Trade))).first() is None
+        assert "190 ₽ — 10 SBAID" in await market.market_text(ctx)
 
 
 async def test_duplicate_payment_notification(app):
@@ -143,7 +163,6 @@ async def test_robokassa_signature(app):
 async def test_no_transfer_without_seller_confirmation(app):
     p = await setup_market(app)
     await place_example_orders(app, p)
-    await run_day(app)
     async with app.tx() as ctx:
         t = (await ctx.s.execute(select(Trade).order_by(Trade.id))).scalars().first()  # Д ← А, 10
         await trades.buyer_paid(ctx, await users.get(ctx, p["Д"].id), t.id)
@@ -154,7 +173,7 @@ async def test_no_transfer_without_seller_confirmation(app):
         t = await ctx.s.get(Trade, t.id)
         assert t.status == TS.DISPUTED
     assert (await shares_of(app, p["Д"]))[0] == 0
-    # покупатель Е не оплатил вовремя — сделка отменена, ему 1 штрафной балл
+    # покупатель Е не оплатил вовремя обе сделки по одной заявке — отменены, ему 1 штрафной балл
     async with app.tx() as ctx:
         other = (await ctx.s.execute(select(Trade).where(Trade.status == TS.CANCELLED))).scalars().all()
         assert {x.buyer_id for x in other} >= {p["Е"].id}
@@ -174,7 +193,6 @@ async def test_no_transfer_without_seller_confirmation(app):
 async def test_seller_confirm_transfers(app):
     p = await setup_market(app)
     await place_example_orders(app, p)
-    await run_day(app)
     async with app.tx() as ctx:
         t = (await ctx.s.execute(select(Trade).order_by(Trade.id))).scalars().first()
         await trades.buyer_paid(ctx, await users.get(ctx, p["Д"].id), t.id)
@@ -301,7 +319,6 @@ async def test_market_shares_not_refundable(app):
 async def test_requisites_visible_only_to_paired_buyer(app):
     p = await setup_market(app)
     await place_example_orders(app, p)
-    await run_day(app)
     async with app.tx() as ctx:
         t = (await ctx.s.execute(select(Trade).order_by(Trade.id))).scalars().first()  # Д ← А
         assert "Тинькофф" in await trades.seller_requisites(ctx, await users.get(ctx, p["Д"].id), t.id)
@@ -345,16 +362,45 @@ async def test_ban_after_three_points(app):
 async def test_order_price_band_and_expiry(app):
     p = await setup_market(app)
     async with app.tx() as ctx:
-        # референсная — цена последнего проданного SBAID на размещении: 20 090 продано → 140 ₽
-        assert await orders.reference_price(ctx) == 140 * R
+        # сделок ещё не было — цена SBAID равна цене размещения
+        assert await orders.reference_price(ctx) == 100 * R
         with pytest.raises(DomainError, match="пределах"):
-            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 281 * R)
-        o = await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 150 * R)
-    await run_day(app)  # не пересеклось → заявка истекла, акции разблокированы
+            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 201 * R)
+        with pytest.raises(DomainError, match="от 1 до 30 дней"):
+            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 150 * R, days=31)
+        o = await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 150 * R, days=1)
+    assert await shares_of(app, p["А"]) == (20, 5)
+    app.clock_obj.now += timedelta(days=1, seconds=1)
     async with app.tx() as ctx:
+        # истёкшая заявка уже не исполняется, даже если её ещё не сняли
+        b = await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 5, 160 * R)
+        assert b.new_trades == []
+    async with app.tx() as ctx:
+        assert await orders.expire(ctx) == 1
         from torgi.models import Order
         assert (await ctx.s.get(Order, o.id)).status == "expired"
     assert await shares_of(app, p["А"]) == (20, 0)
+
+
+async def test_daily_summary_once_and_only_with_trades(app):
+    p = await setup_market(app)
+    app.clock_obj.now = app.clock_obj.now.replace(hour=18, minute=0)  # 21:00 МСК
+    async with app.tx() as ctx:
+        assert await market.daily_summary(ctx) is False  # сделок не было — не публикуем
+    app.clock_obj.now += timedelta(days=1)
+    app.clock_obj.now = app.clock_obj.now.replace(hour=9)  # 12:00 МСК
+    await place_example_orders(app, p)
+    async with app.tx() as ctx:
+        assert await market.daily_summary(ctx) is False  # ещё рано
+    app.clock_obj.now = app.clock_obj.now.replace(hour=18, minute=5)
+    async with app.tx() as ctx:
+        assert await market.daily_summary(ctx) is True
+    async with app.tx() as ctx:
+        assert await market.daily_summary(ctx) is False
+    posts = [t for k, _, t in app.notifier.sent if k == "channel" and "Биржа SBAID" in t]
+    assert len(posts) == 1
+    assert "Цена: 125 ₽ (+25.0% за день)" in posts[0] and "Сделок: 4, объём 50 SBAID" in posts[0]
+    assert "Мин. 110 ₽, макс. 125 ₽" in posts[0]
 
 
 async def test_settings_take_effect_after_7_days(app):
@@ -415,6 +461,11 @@ async def test_trial_mode_manual_payment(app):
 
 
 async def test_ladder_price_in_placement(app):
+    """Лесенка по умолчанию выключена; проверяем, что включённая считается верно."""
+    from torgi.models import SettingChange
+    async with app.tx() as ctx:
+        for k, v in (("ladder_every", 1000), ("ladder_step_kop", 200)):
+            ctx.s.add(SettingChange(key=k, value={"v": v}, published_at=ctx.now, effective_at=ctx.now))
     await open_placement(app)  # 100 ₽, +2 ₽ за каждые 1000
     a, b = await member(app, 900, "lad_a"), await member(app, 901, "lad_b")
     p1 = await buy_on_placement(app, a, 995)

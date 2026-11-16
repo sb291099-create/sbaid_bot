@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from torgi.core import registry
 from torgi.models import Trade, User
-from torgi.scheduler import run_trading_day_if_due, tick
+from torgi.scheduler import tick
 from torgi.telegram.bot import build_dispatcher
 from torgi.telegram.notifier import TelegramNotifier
 from torgi.web import build_web
@@ -149,25 +149,22 @@ async def test_full_cycle_via_telegram(app):
     await h.say(SELLER, "+79001234567")
     await h.say(SELLER, "Сбер")
     await h.say(SELLER, "50")
-    assert "срок" in await h.say(SELLER, "110")
-    assert "Заявка №1 принята" in await h.click(SELLER, "ord:new:1")
+    assert "Сколько держать" in await h.say(SELLER, "110")
+    assert "Остаток 50 SBAID ждёт в стакане" in await h.click(SELLER, "ord:new:7")
     assert "одновременно" in await _try_buy(h, SELLER)
+    assert "110 ₽ — 50 SBAID" in await h.say(BUYER, "/market")
 
-    await h.say(BUYER, "/buy")
-    await h.say(BUYER, "30")
+    # покупка исполняется сразу по цене заявки из стакана
+    assert "Лучшая продажа в стакане: 110 ₽" in await h.say(BUYER, "/buy")
+    assert "купить сразу, укажите цену не ниже 110 ₽" in await h.say(BUYER, "30")
     await h.say(BUYER, "120")
-    assert "Заявка №2 принята" in await h.click(BUYER, "ord:new:2")
-
-    # торговый день по расписанию
-    async with app.tx() as ctx:
-        from torgi.core import orders
-        cutoff = await orders.next_cutoff(ctx)
-    app.clock_obj.now = cutoff + timedelta(minutes=1)
-    assert await run_trading_day_if_due(app) is True
-    assert await run_trading_day_if_due(app) is False
-    assert any("Единая цена: 110 ₽" in t for t in h.session.texts(-100100))
+    await h.click(BUYER, "ord:new:1")
     buyer_msgs = "\n".join(h.session.texts(BUYER))
+    assert "Заявка №2" in buyer_msgs and "Исполнено сразу: 30 SBAID в 1 сделке" in buyer_msgs
+    assert "вы покупаете 30 SBAID по 110 ₽" in buyer_msgs
     assert "+79001234567" in buyer_msgs and "Сбер" in buyer_msgs
+    assert any("вы продаёте 30 SBAID по 110 ₽" in t for t in h.session.texts(SELLER))
+    assert "SBAID 110 ₽" in await h.say(SELLER, "/market")
     # реквизиты не уходят ни в канал, ни в группу, ни другим людям
     for chat in (-100100, -100200, FOUNDER):
         assert "+79001234567" not in "\n".join(t or "" for t in h.session.texts(chat))
@@ -176,8 +173,12 @@ async def test_full_cycle_via_telegram(app):
     assert "не ваша" in "".join(str(getattr(c, "text", "")) for c in await _alerts(h, BUYER, "tr:confirm:1"))
     assert "сделка завершена" in await h.click(SELLER, "tr:confirm:1")
     assert "SBAID: 530 " in await h.say(BUYER, "/portfolio")
-    assert "SBAID: 70 (заблокировано 0)" in await h.say(SELLER, "/portfolio")  # остаток заявки истёк
+    assert "SBAID: 70 (заблокировано 20)" in await h.say(SELLER, "/portfolio")  # остаток заявки в стакане
+    assert "отменена" in await h.click(SELLER, "ord:cancel:1")
+    assert "SBAID: 70 (заблокировано 0)" in await h.say(SELLER, "/portfolio")
 
+    # вечером сводка торгов за день в канале
+    app.clock_obj.now = app.clock_obj.now.replace(hour=18, minute=1)  # 21:01 МСК
     await tick(app)  # планировщик отрабатывает без ошибок
     async with app.tx() as ctx:
         await registry.check_invariant(ctx)
@@ -186,6 +187,10 @@ async def test_full_cycle_via_telegram(app):
         founder = (await ctx.s.execute(select(User).where(User.telegram_id == FOUNDER))).scalar_one()
         assert founder.role == "founder"
     assert "placement.create" in await h.say(FOUNDER, "/journal")
+    summary = [t for t in h.session.texts(-100100) if "Биржа SBAID" in t]
+    assert len(summary) == 1 and "Цена: 110 ₽" in summary[0] and "Сделок: 1, объём 30 SBAID" in summary[0]
+    await tick(app)
+    assert len([t for t in h.session.texts(-100100) if "Биржа SBAID" in t]) == 1  # раз в день
 
 
 async def _try_buy(h, tg_id):

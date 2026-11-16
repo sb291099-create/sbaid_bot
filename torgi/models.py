@@ -142,19 +142,6 @@ class Order(Base):
         return self.shares - self.filled
 
 
-class TradingSession(Base):
-    __tablename__ = "sessions"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    date: Mapped[datetime] = _ts(False)
-    cutoff_at: Mapped[datetime] = _ts(False)
-    price: Mapped[int | None] = mapped_column(BigInteger)
-    volume: Mapped[int] = mapped_column(Integer, default=0)
-    trades_count: Mapped[int] = mapped_column(Integer, default=0)
-    # done | failed (не состоялся)
-    status: Mapped[str] = mapped_column(String(16))
-    __table_args__ = (UniqueConstraint("cutoff_at", name="sessions_cutoff_unique"),)
-
-
 class TradeStatus:
     AWAITING_PAYMENT = "awaiting_payment"
     AWAITING_CONFIRMATION = "awaiting_confirmation"
@@ -167,7 +154,6 @@ class TradeStatus:
 class Trade(Base):
     __tablename__ = "trades"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
     buyer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     seller_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     buy_order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
@@ -183,6 +169,7 @@ class Trade(Base):
     reminders_sent: Mapped[list] = mapped_column(JSONB, default=list)
     evidence: Mapped[list] = mapped_column(JSONB, default=list)
     completed_at: Mapped[datetime | None] = _ts()
+    created_at: Mapped[datetime] = _ts(False)
 
 
 class Transfer(Base):
@@ -262,7 +249,7 @@ class PriceHistory(Base):
     __tablename__ = "price_history"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date: Mapped[datetime] = _ts(False)
-    source: Mapped[str] = mapped_column(String(16))  # session | placement
+    source: Mapped[str] = mapped_column(String(16))  # trade | placement
     price: Mapped[int] = mapped_column(BigInteger)
     volume: Mapped[int] = mapped_column(Integer)
 
