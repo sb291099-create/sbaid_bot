@@ -106,9 +106,14 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
     await state.clear()
     if users.is_registered(user):
         return await m.answer("Вы уже зарегистрированы.\n\n" + HELP)
+    c = app.config
+    channel = f"«{c.channel_name}»" + (f" ({c.channel_url})" if c.channel_url else "")
     await m.answer(
-        "Это клуб SBAID. 1 SBAID = 1 голос в решениях основателя. SBAID продаются на "
-        "размещениях, а раз в неделю участники могут купить и продать их друг другу.\n\n"
+        f"Это клуб SBAID. Основатель — {c.founder_name}. 1 SBAID = 1 голос в его решениях: "
+        f"вы решаете, он делает.\n\n"
+        f"SBAID продаются на размещениях, а раз в неделю участники могут купить и продать их друг "
+        f"другу. Новости и итоги торгов выходят в канале {channel}. После первой покупки бот "
+        f"пришлёт личную ссылку в закрытую группу «{c.group_name}».\n\n"
         "SBAID — единица участия и голоса в клубе. Это не ценная бумага, не доля в имуществе "
         "и не инвестиция, дохода она не гарантирует.\n\n"
         + legal_links(app),

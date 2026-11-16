@@ -60,4 +60,5 @@ class TelegramNotifier:
         link = await self.bot.create_chat_invite_link(
             self.config.shareholders_group_id, member_limit=1, name=f"user {user_id}")
         await self.bot.send_message(
-            tg_id, f"🎉 Теперь у вас есть SBAID, вы в клубе! Ваша личная одноразовая ссылка в закрытую группу:\n{link.invite_link}")
+            tg_id, f"🎉 Теперь у вас есть SBAID, вы в клубе! Ваша личная одноразовая ссылка в закрытую группу "
+                   f"«{self.config.group_name}»:\n{link.invite_link}")

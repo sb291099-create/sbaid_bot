@@ -40,6 +40,11 @@ class Config:
     # usn_income — ИП на УСН «доходы»; npd — самозанятый (Робочеки СМЗ).
     robokassa_sno: str = "usn_income"
     receipt_item_name: str = "Участие в клубе SBAID, {n} голосов"
+    # Названия для сообщений бота
+    founder_name: str = "Сергей Борзунов"
+    channel_name: str = "Сергей Борзунов · $SBAID"
+    channel_url: str = ""
+    group_name: str = "SBAID Holders"
     # HTTP-сервер для уведомлений Robokassa (ResultURL).
     web_host: str = "0.0.0.0"
     web_port: int = 8080
@@ -68,6 +73,10 @@ class Config:
             robokassa_test_mode=e("ROBOKASSA_TEST_MODE", "1") == "1",
             robokassa_sno=e("ROBOKASSA_SNO", "usn_income"),
             receipt_item_name=e("RECEIPT_ITEM_NAME", cls.receipt_item_name),
+            founder_name=e("FOUNDER_NAME", cls.founder_name),
+            channel_name=e("CHANNEL_NAME", cls.channel_name),
+            channel_url=e("CHANNEL_URL", ""),
+            group_name=e("GROUP_NAME", cls.group_name),
             web_host=e("WEB_HOST", "0.0.0.0"),
             web_port=int(e("WEB_PORT", "8080")),
         )

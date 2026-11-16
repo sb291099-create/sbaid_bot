@@ -118,7 +118,8 @@ async def test_full_cycle_via_telegram(app):
         await h.say(BUYER, "/placement")
         await h.say(BUYER, "500")
         assert (await h.pay(client, 2, 500 * 100_00))[0] == 200
-    assert any("одноразовая ссылка" in t for t in h.session.texts(SELLER))
+    assert any("одноразовая ссылка в закрытую группу «SBAID Holders»" in t for t in h.session.texts(SELLER))
+    assert any("Сергей Борзунов · $SBAID" in t for t in h.session.texts(SELLER))
     assert "SBAID: 100 " in await h.say(SELLER, "/portfolio")
 
     # основатель не может подать заявку
