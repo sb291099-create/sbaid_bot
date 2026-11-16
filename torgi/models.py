@@ -75,6 +75,10 @@ class Placement(Base):
     volume: Mapped[int] = mapped_column(Integer)
     price: Mapped[int] = mapped_column(BigInteger)  # стартовая цена, копейки за SBAID
     # лесенка: цена растёт на ladder_step после каждых ladder_every проданных (0 — одна цена)
+    # fixed — продажа по цене (с лесенкой или без); auction — аукцион заявок, как при IPO
+    mode: Mapped[str] = mapped_column(String(8), default="fixed")
+    # для аукциона: минимальная цена заявки (0 — без минимума); после итогов price = цена отсечения
+    min_price: Mapped[int] = mapped_column(BigInteger, default=0)
     ladder_every: Mapped[int] = mapped_column(Integer, default=0)
     ladder_step: Mapped[int] = mapped_column(BigInteger, default=0)
     starts_at: Mapped[datetime] = _ts(False)
@@ -85,6 +89,20 @@ class Placement(Base):
     # draft → open → closed
     status: Mapped[str] = mapped_column(String(16), default="draft")
     price_calc: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class PlacementBid(Base):
+    """Заявка на аукционе размещения: «куплю shares SBAID по цене до max_price»."""
+    __tablename__ = "placement_bids"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    placement_id: Mapped[int] = mapped_column(ForeignKey("placements.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    shares: Mapped[int] = mapped_column(Integer)
+    max_price: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = _ts(False)
+    # active | cancelled | won | partial | lost
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    allocated: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Purchase(Base):

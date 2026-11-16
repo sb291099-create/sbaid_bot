@@ -5,11 +5,11 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
-from ..models import Placement, PriceHistory, Purchase, Role, Trade, TradeStatus, User
+from ..models import Placement, PlacementBid, PriceHistory, Purchase, Role, Trade, TradeStatus, User
 from ..timeutil import fmt_msk, rub
 from . import registry, settings, users
 from .audit import audit
-from .context import Ctx
+from .context import Button, Ctx
 from .errors import DomainError
 from .pricing import PriceCalc, ladder_amount, ladder_price, next_placement_price
 
@@ -25,6 +25,11 @@ def final_price(p: Placement) -> int:
 
 
 def ladder_text(p: Placement) -> str:
+    if p.mode == "auction":
+        floor = f" Минимальная цена заявки {rub(p.min_price)}." if p.min_price else ""
+        return (f"Аукцион: до окончания приёма заявок каждый указывает, сколько SBAID и по какой цене "
+                f"готов купить. Затем бот находит одну цену, при которой расходится партия, и все "
+                f"победители платят по ней. Рыночный ориентир — {rub(p.price)}.{floor}")
     if not p.ladder_every or not p.ladder_step:
         return f"Цена {rub(p.price)} за SBAID на всю партию."
     top = unit_price(p, p.volume - 1)
@@ -57,14 +62,22 @@ async def suggested_price(ctx: Ctx) -> PriceCalc:
 
 
 async def create(ctx: Ctx, actor: User, volume: int, price: int | None, days: int,
-                 starts_at: datetime | None = None) -> Placement:
+                 starts_at: datetime | None = None, mode: str = "fixed") -> Placement:
+    """mode=fixed: price — цена (None — расчётная рыночная).
+    mode=auction: price — минимальная цена заявки (None — без минимума), цену задаст аукцион."""
     users.require_founder(actor)
     if volume <= 0 or days <= 0:
         raise DomainError("Объём и срок должны быть положительными")
+    if mode not in ("fixed", "auction"):
+        raise DomainError("Неизвестный способ размещения")
     calc = await suggested_price(ctx)
-    if price is None:
+    min_price = 0
+    if mode == "auction":
+        min_price = price or 0
+        price = calc.price  # ориентир; итоговую цену задаст аукцион
+    elif price is None:
         price = calc.price
-    if price <= 0:
+    if price <= 0 or min_price < 0:
         raise DomainError("Цена должна быть положительной")
     t = await registry.treasury(ctx)
     tre = await registry.holding(ctx, t.id)
@@ -84,14 +97,17 @@ async def create(ctx: Ctx, actor: User, volume: int, price: int | None, days: in
     per_user = max(lot, (volume * limit_pct // 100) // lot * lot)
     number = int((await ctx.s.execute(select(func.coalesce(func.max(Placement.number), 0)))).scalar_one()) + 1
     starts_at = starts_at or ctx.now
-    p = Placement(number=number, volume=volume, price=price, ladder_every=every, ladder_step=lstep,
+    if mode == "auction":
+        every = lstep = 0
+    p = Placement(number=number, volume=volume, price=price, mode=mode, min_price=min_price,
+                  ladder_every=every, ladder_step=lstep,
                   starts_at=starts_at,
                   ends_at=starts_at + timedelta(days=days), lot=lot, per_user_limit=per_user, status="draft",
                   price_calc={"suggested": calc.price, "steps": calc.steps, "used": price})
     ctx.s.add(p)
     await ctx.s.flush()
-    audit(ctx, actor.id, "placement.create", placement_id=p.id, volume=volume, price=price,
-          suggested=calc.price, ends_at=p.ends_at)
+    audit(ctx, actor.id, "placement.create", placement_id=p.id, volume=volume, price=price, mode=mode,
+          min_price=min_price, suggested=calc.price, ends_at=p.ends_at)
     return p
 
 
@@ -121,6 +137,9 @@ async def close(ctx: Ctx, actor: User | None, placement_id: int) -> Placement:
     if p.status != "open":
         raise DomainError("Размещение не открыто")
     p.status = "closed"
+    if p.mode == "auction":
+        await _finish_auction(ctx, p, actor)
+        return p
     reserved = (await ctx.s.execute(select(Purchase).where(
         Purchase.placement_id == p.id, Purchase.status == "reserved").with_for_update())).scalars().all()
     for r in reserved:
@@ -185,6 +204,8 @@ async def reserve(ctx: Ctx, user: User, shares: int) -> tuple[Purchase, str]:
     cur = await current(ctx)
     if cur is None or cur.ends_at <= ctx.now:
         raise DomainError("Сейчас нет открытого размещения")
+    if cur.mode == "auction":
+        raise DomainError("Сейчас идёт аукцион: подайте заявку через /placement")
     p = await _get_locked(ctx, cur.id)
     if shares <= 0 or shares % p.lot:
         raise DomainError(f"Количество должно быть кратно лоту ({p.lot} SBAID)")
@@ -276,7 +297,7 @@ async def on_payment(ctx: Ctx, inv_id: int, amount: int, op: str | None = None) 
     if not u.group_invite_sent:
         u.group_invite_sent = True
         ctx.invite(u.id)
-    if p.sold >= p.volume:
+    if p.sold >= p.volume and p.status == "open":
         await close(ctx, None, p.id)
     return "credited"
 
@@ -289,3 +310,115 @@ async def expire_reservations(ctx: Ctx) -> int:
         audit(ctx, None, "purchase.expired", purchase_id=r.id)
         ctx.send(r.user_id, f"Резерв {r.shares} SBAID снят: оплата не пришла вовремя.")
     return len(rows)
+
+
+# --- аукцион размещения ----------------------------------------------------------------
+
+def clear_auction(volume: int, lot: int, bids: list[PlacementBid]) -> tuple[int | None, dict[int, int]]:
+    """Аукцион с единой ценой. Заявки по убыванию цены (при равной — раньше поданная)
+    получают SBAID, пока не кончится партия; цена для всех — цена последней
+    удовлетворённой заявки. Возвращает (цена, {bid_id: SBAID})."""
+    left, alloc, price = volume, {}, None
+    for b in sorted(bids, key=lambda b: (-b.max_price, b.created_at, b.id)):
+        if left < lot:
+            break
+        q = min(b.shares, left) // lot * lot
+        if q <= 0:
+            continue
+        alloc[b.id] = q
+        left -= q
+        price = b.max_price
+    return price, alloc
+
+
+async def my_bid(ctx: Ctx, placement_id: int, user_id: int) -> PlacementBid | None:
+    return (await ctx.s.execute(select(PlacementBid).where(
+        PlacementBid.placement_id == placement_id, PlacementBid.user_id == user_id,
+        PlacementBid.status == "active"))).scalar_one_or_none()
+
+
+async def _open_auction(ctx: Ctx) -> Placement:
+    cur = await current(ctx)
+    if cur is None or cur.mode != "auction" or cur.ends_at <= ctx.now:
+        raise DomainError("Сейчас нет открытого аукциона размещения")
+    return await _get_locked(ctx, cur.id)
+
+
+async def place_bid(ctx: Ctx, user: User, shares: int, max_price: int) -> PlacementBid:
+    """Подать или заменить заявку на аукционе. Деньги не списываются до итогов."""
+    if user.role == Role.FOUNDER:
+        raise DomainError("Основатель не участвует в аукционе — его SBAID и так в казне")
+    users.require_member(user)
+    p = await _open_auction(ctx)
+    if shares <= 0 or shares % p.lot:
+        raise DomainError(f"Количество должно быть кратно лоту ({p.lot} SBAID)")
+    if shares > p.per_user_limit:
+        raise DomainError(f"Лимит в одни руки — {p.per_user_limit} SBAID")
+    if max_price < max(100, p.min_price):
+        raise DomainError(f"Цена заявки — не меньше {rub(max(100, p.min_price))}")
+    old = await my_bid(ctx, p.id, user.id)
+    if old is not None:
+        old.status = "cancelled"
+        await ctx.s.flush()
+    await registry.check_ownership_limit(ctx, user.id, shares)
+    b = PlacementBid(placement_id=p.id, user_id=user.id, shares=shares, max_price=max_price,
+                     created_at=ctx.now, status="active", allocated=0)
+    ctx.s.add(b)
+    await ctx.s.flush()
+    audit(ctx, user.id, "auction.bid", placement_id=p.id, bid_id=b.id, shares=shares, max_price=max_price,
+          replaced=old.id if old else None)
+    return b
+
+
+async def cancel_bid(ctx: Ctx, user: User) -> None:
+    p = await _open_auction(ctx)
+    b = await my_bid(ctx, p.id, user.id)
+    if b is None:
+        raise DomainError("У вас нет активной заявки")
+    b.status = "cancelled"
+    audit(ctx, user.id, "auction.cancel", placement_id=p.id, bid_id=b.id)
+
+
+async def _finish_auction(ctx: Ctx, p: Placement, actor: User | None) -> None:
+    bids = (await ctx.s.execute(select(PlacementBid).where(
+        PlacementBid.placement_id == p.id, PlacementBid.status == "active").with_for_update())).scalars().all()
+    price, alloc = clear_auction(p.volume, p.lot, list(bids))
+    demand = sum(b.shares for b in bids)
+    hours = await settings.get(ctx, "auction_pay_hours")
+    pay_until = ctx.now + timedelta(hours=hours)
+    if price is not None:
+        p.price = price
+    allocated = sum(alloc.values())
+    for b in bids:
+        q = alloc.get(b.id, 0)
+        b.allocated = q
+        b.status = "won" if q == b.shares else ("partial" if q else "lost")
+        if not q:
+            ctx.send(b.user_id, f"Аукцион размещения №{p.number} завершён по цене {rub(price)}. "
+                                f"Ваша заявка по {rub(b.max_price)} оказалась ниже цены отсечения, "
+                                f"SBAID не достались. Деньги не списывались.")
+            continue
+        pur = Purchase(placement_id=p.id, user_id=b.user_id, shares=q, amount=q * price, status="reserved",
+                       reserved_until=pay_until, shares_remaining=0)
+        ctx.s.add(pur)
+        await ctx.s.flush()
+        audit(ctx, None, "purchase.reserve", purchase_id=pur.id, shares=q, amount=pur.amount, auction_bid=b.id)
+        part = "" if q == b.shares else f" (из {b.shares} запрошенных: партия закончилась)"
+        url = payment_link(ctx, pur)
+        kb = [[Button(f"Оплатить {rub(pur.amount)}", url=url)]] if url.startswith("http") else None
+        ctx.send(b.user_id, f"🎉 Аукцион размещения №{p.number} завершён. Цена для всех: {rub(price)}.\n"
+                            f"Вам достаётся {q} SBAID{part} на {rub(pur.amount)}. Оплатите до "
+                            f"{fmt_msk(pay_until)}, иначе резерв снимется." + ("" if kb else f"\n{url}"), kb)
+        if not payments_configured(ctx):
+            ctx.staff(f"🧪 Пробный режим: счёт №{pur.id} на {rub(pur.amount)} ({q} SBAID). /testpay {pur.id}")
+    if price is not None:
+        ctx.s.add(PriceHistory(date=ctx.now, source="placement", price=price, volume=allocated))
+    audit(ctx, actor.id if actor else None, "placement.close", placement_id=p.id, mode="auction",
+          price=price, demand=demand, allocated=allocated, bids=len(bids))
+    if price is None:
+        ctx.publish(f"Аукцион размещения №{p.number} завершён без заявок. Все {p.volume} SBAID остаются в казне.")
+    else:
+        ctx.publish(f"✅ Аукцион размещения №{p.number} завершён\nЦена отсечения: {rub(price)}\n"
+                    f"Спрос: {demand} SBAID от {len(bids)} участников, распределено {allocated} из {p.volume}.\n"
+                    f"Победители оплачивают до {fmt_msk(pay_until)}; неоплаченное и нераспределённое "
+                    f"остаётся в казне.")

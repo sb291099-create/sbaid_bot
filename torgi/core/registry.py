@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from ..models import (
     Gift, Holding, Order, Placement, Purchase, Role, Trade, TradeStatus, Transfer, User,
-)
+ PlacementBid,)
 from . import settings
 from .context import Ctx
 from .errors import DomainError
@@ -132,8 +132,10 @@ async def incoming_exposure(ctx: Ctx, user_id: int) -> int:
         Purchase.user_id == user_id, Purchase.status == "reserved")
     q4 = select(func.coalesce(func.sum(Gift.shares), 0)).where(
         Gift.to_user_id == user_id, Gift.status == "pending")
+    q5 = select(func.coalesce(func.sum(PlacementBid.shares), 0)).where(
+        PlacementBid.user_id == user_id, PlacementBid.status == "active")
     total = 0
-    for q in (q1, q2, q3, q4):
+    for q in (q1, q2, q3, q4, q5):
         total += int((await ctx.s.execute(q)).scalar_one())
     return total
 

@@ -434,3 +434,90 @@ async def test_ladder_price_in_placement(app):
         assert await placements.last_placement_price(ctx) == 102 * R
         assert await orders.reference_price(ctx) == 102 * R
     assert any("от 100 ₽ до 102 ₽" in t for k, _, t in app.notifier.sent if k == "channel")
+
+
+async def open_auction(app, volume=25_000, min_price=None, days=7):
+    f = await founder(app)
+    async with app.tx() as ctx:
+        p = await placements.create(ctx, f, volume, min_price, days=days, mode="auction")
+        await placements.publish(ctx, f, p.id)
+    return p
+
+
+async def bid(app, u, shares, price_rub):
+    app.clock_obj.now += timedelta(seconds=1)
+    async with app.tx() as ctx:
+        return await placements.place_bid(ctx, await users.get(ctx, u.id), shares, price_rub * R)
+
+
+async def test_auction_uniform_price(app):
+    p = await open_auction(app, volume=1000)
+    a, b, c, d = [await member(app, 950 + i, f"auc{i}") for i in range(4)]
+    await bid(app, a, 100, 150)
+    await bid(app, b, 100, 150)  # «замена»: та же сумма
+    await bid(app, c, 100, 120)  # после — эта заявка заменит прежнюю
+    await bid(app, c, 100, 137)
+    await bid(app, d, 100, 90)
+    async with app.tx() as ctx:
+        with pytest.raises(DomainError, match="аукцион"):
+            await placements.reserve(ctx, await users.get(ctx, a.id), 5)
+    app.clock_obj.now = p.ends_at + timedelta(minutes=1)
+    async with app.tx() as ctx:
+        await placements.close_expired(ctx)
+    # спрос меньше партии: все выигрывают по цене самой низкой заявки
+    async with app.tx() as ctx:
+        from torgi.models import Purchase
+        purs = (await ctx.s.execute(select(Purchase).order_by(Purchase.id))).scalars().all()
+        assert [(x.user_id, x.shares, x.amount) for x in purs] == [
+            (a.id, 100, 100 * 90 * R), (b.id, 100, 100 * 90 * R), (c.id, 100, 100 * 90 * R), (d.id, 100, 100 * 90 * R)]
+        assert (await ctx.s.get(type(p), p.id)).price == 90 * R
+    for pur in purs:
+        async with app.tx() as ctx:
+            assert await placements.on_payment(ctx, pur.id, pur.amount) == "credited"
+    assert await shares_of(app, c) == (100, 0)
+    async with app.tx() as ctx:
+        assert await orders.reference_price(ctx) == 90 * R  # ниже 100 ₽ — допустимо
+    await invariant(app)
+
+
+async def test_auction_oversubscribed_cutoff(app):
+    p = await open_auction(app, volume=250)
+    async with app.tx() as ctx:  # маленькая партия: для теста поднимаем лимиты в одни руки и владения
+        (await ctx.s.get(type(p), p.id)).per_user_limit = 100
+        from torgi.models import SettingChange
+        ctx.s.add(SettingChange(key="ownership_limit_pct", value={"v": 100}, published_at=ctx.now,
+                                effective_at=ctx.now))
+    a, b, c = [await member(app, 960 + i, f"ov{i}") for i in range(3)]
+    await bid(app, a, 100, 160)
+    await bid(app, b, 100, 140)
+    await bid(app, c, 100, 120)
+    app.clock_obj.now = p.ends_at + timedelta(minutes=1)
+    async with app.tx() as ctx:
+        await placements.close_expired(ctx)
+        from torgi.models import PlacementBid, Purchase
+        bids = {x.user_id: (x.status, x.allocated) for x in (await ctx.s.execute(select(PlacementBid))).scalars()}
+        assert bids == {a.id: ("won", 100), b.id: ("won", 100), c.id: ("partial", 50)}
+        purs = (await ctx.s.execute(select(Purchase))).scalars().all()
+        assert {x.amount for x in purs} == {100 * 120 * R, 50 * 120 * R}  # все по 120 ₽
+    assert any("Цена отсечения: 120 ₽" in t for k, _, t in app.notifier.sent if k == "channel")
+    # неоплата за 48 часов — резерв снимается, SBAID остаются в казне
+    app.clock_obj.now += timedelta(hours=49)
+    async with app.tx() as ctx:
+        assert await placements.expire_reservations(ctx) == 3
+    await invariant(app)
+
+
+async def test_auction_rules(app):
+    await open_auction(app, volume=25_000, min_price=80 * R)
+    u = await member(app, 970, "rules")
+    async with app.tx() as ctx:
+        with pytest.raises(DomainError, match="не меньше 80"):
+            await placements.place_bid(ctx, await users.get(ctx, u.id), 10, 79 * R)
+        with pytest.raises(DomainError, match="одни руки"):
+            await placements.place_bid(ctx, await users.get(ctx, u.id), 2505, 100 * R)
+        with pytest.raises(DomainError, match="основателю|Основатель"):
+            await placements.place_bid(ctx, await founder(app), 10, 100 * R)
+    await bid(app, u, 10, 100)
+    async with app.tx() as ctx:
+        await placements.cancel_bid(ctx, await users.get(ctx, u.id))
+        assert await placements.my_bid(ctx, (await placements.current(ctx)).id, u.id) is None

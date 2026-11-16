@@ -29,6 +29,8 @@ class Reg(StatesGroup):
 
 class Buy(StatesGroup):
     placement_qty = State()
+    auction_qty = State()
+    auction_price = State()
 
 
 class OrderFlow(StatesGroup):
@@ -170,6 +172,17 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
         p = await placements.current(ctx)
         if p is None:
             return await m.answer("Сейчас нет открытого размещения. Объявление появится в канале.")
+        if p.mode == "auction":
+            bid = await placements.my_bid(ctx, p.id, user.id)
+            mine = (f"\n\nВаша заявка: {bid.shares} SBAID по цене до {rub(bid.max_price)}. Новая заявка "
+                    f"заменит её.") if bid else ""
+            await state.set_state(Buy.auction_qty)
+            kb = markup([[Button("Отменить мою заявку", "pl:cancelbid")]]) if bid else None
+            return await m.answer(
+                f"Аукцион размещения №{p.number}: {p.volume} SBAID\n{placements.ladder_text(p)}\n"
+                f"Лот: {p.lot}, лимит в одни руки: {p.per_user_limit}\nПриём заявок до {fmt_msk(p.ends_at)}. "
+                f"Деньги списываются только после итогов, если заявка выиграла.{mine}\n\n"
+                f"Сколько SBAID хотите купить? Число, кратное {p.lot}.", reply_markup=kb)
         left = await placements.available(ctx, p)
         mine = await placements.user_bought(ctx, p.id, user.id)
         now_price = await placements.next_unit_price(ctx, p)
@@ -183,6 +196,35 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
     await m.answer(f"Размещение №{p.number}\nЦена сейчас: {rub(now_price)} за 1 SBAID{ladder}\nОсталось: {left} из {p.volume}\n"
                    f"Лот: {p.lot} SBAID\nЛимит в одни руки: {p.per_user_limit} (у вас уже {mine})\n"
                    f"До {fmt_msk(p.ends_at)}\n\nСколько SBAID хотите купить? Напишите число, кратное {p.lot}.")
+
+
+@router.message(Buy.auction_qty, F.text, ~F.text.startswith("/"))
+async def auction_qty(m: Message, state: FSMContext):
+    await state.update_data(qty=parse_int(m.text))
+    await state.set_state(Buy.auction_price)
+    await m.answer("Максимальная цена за 1 SBAID, ₽? Если цена аукциона окажется ниже, заплатите меньше: "
+                   "все победители платят одну цену.")
+
+
+@router.message(Buy.auction_price, F.text, ~F.text.startswith("/"))
+async def auction_price(m: Message, user: User, app: App, state: FSMContext):
+    data = await state.get_data()
+    async with app.tx() as ctx:
+        b = await placements.place_bid(ctx, await users.get(ctx, user.id), data["qty"], parse_rub(m.text))
+        p = await placements.current(ctx)
+    await state.clear()
+    await m.answer(f"Заявка принята: {b.shares} SBAID по цене до {rub(b.max_price)}. Итоги — после "
+                   f"{fmt_msk(p.ends_at)}, бот пришлёт результат и ссылку на оплату. Изменить заявку: /placement")
+
+
+@router.callback_query(F.data == "pl:cancelbid")
+async def auction_cancel(c: CallbackQuery, user: User, app: App, state: FSMContext):
+    async with app.tx() as ctx:
+        await placements.cancel_bid(ctx, await users.get(ctx, user.id))
+    await state.clear()
+    await c.message.edit_reply_markup(reply_markup=None)
+    await c.message.answer("Заявка на аукционе отменена.")
+    await c.answer()
 
 
 @router.message(Buy.placement_qty, F.text, ~F.text.startswith("/"))
@@ -460,7 +502,8 @@ async def public_registry(m: Message, user: User, app: App):
 
 # --- админ ---------------------------------------------------------------------------
 ADMIN_HELP = ("Админ-команды:\n"
-              "/newplacement <объём> <дней> [цена ₽] — черновик размещения (без цены — расчётная)\n"
+              "/newauction <объём> <дней> [мин. цена ₽] — размещение аукционом: цену задаёт спрос\n"
+              "/newplacement <объём> <дней> [цена ₽] — размещение по цене (без цены — рыночная)\n"
               "/closeplacement — закрыть текущее размещение\n"
               "/testpay <№ счёта> — пробный режим: подтвердить оплату вручную, пока нет Robokassa\n"
               "/disputes — споры; /resolve <№> transfer|cancel <комментарий>\n"
@@ -489,15 +532,18 @@ async def admin_help(m: Message, user: User):
     await m.answer(ADMIN_HELP)
 
 
-@router.message(Command("newplacement"))
+@router.message(Command("newplacement", "newauction"))
 async def new_placement(m: Message, command: CommandObject, user: User, app: App):
+    auction = command.command == "newauction"
     parts = (command.args or "").split()
     if len(parts) < 2:
-        raise DomainError("Формат: /newplacement <объём> <дней> [цена ₽]")
+        raise DomainError("Формат: /newauction <объём> <дней> [мин. цена ₽]" if auction
+                          else "Формат: /newplacement <объём> <дней> [цена ₽]")
     volume, days = parse_int(parts[0]), parse_int(parts[1])
     price = parse_rub(parts[2]) if len(parts) > 2 else None
     async with app.tx() as ctx:
-        p = await placements.create(ctx, await users.get(ctx, user.id), volume, price, days)
+        p = await placements.create(ctx, await users.get(ctx, user.id), volume, price, days,
+                                    mode="auction" if auction else "fixed")
     steps = "\n".join(f"• {s}" for s in p.price_calc["steps"])
     await m.answer(f"Черновик размещения №{p.number}: {p.volume} SBAID, лот {p.lot}, "
                    f"лимит в одни руки {p.per_user_limit}, до {fmt_msk(p.ends_at)}.\n{placements.ladder_text(p)}\n\n"
