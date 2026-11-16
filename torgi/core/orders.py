@@ -46,7 +46,7 @@ async def create(ctx: Ctx, user: User, side: str, shares: int, limit_price: int,
     if side not in ("buy", "sell"):
         raise DomainError("Неизвестный тип заявки")
     if shares <= 0:
-        raise DomainError("Количество акций должно быть положительным")
+        raise DomainError("Количество SBAID должно быть положительным")
     max_weeks = await settings.get(ctx, "order_max_weeks")
     if not 1 <= weeks <= max_weeks:
         raise DomainError(f"Срок заявки — от 1 до {max_weeks} недель")

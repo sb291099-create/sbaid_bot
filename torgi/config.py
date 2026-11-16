@@ -39,7 +39,7 @@ class Config:
     robokassa_test_mode: bool = True
     # usn_income — ИП на УСН «доходы»; npd — самозанятый (Робочеки СМЗ).
     robokassa_sno: str = "usn_income"
-    receipt_item_name: str = "Участие в клубе, {n} акций (голосов)"
+    receipt_item_name: str = "Участие в клубе SBAID, {n} голосов"
     # HTTP-сервер для уведомлений Robokassa (ResultURL).
     web_host: str = "0.0.0.0"
     web_port: int = 8080

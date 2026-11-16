@@ -44,7 +44,7 @@ async def lock_holdings(ctx: Ctx, *user_ids: int) -> dict[int, Holding]:
 async def block(ctx: Ctx, user_id: int, shares: int) -> None:
     h = (await lock_holdings(ctx, user_id))[user_id]
     if h.total - h.blocked < shares:
-        raise DomainError(f"Недостаточно свободных акций: доступно {h.total - h.blocked}")
+        raise DomainError(f"Недостаточно свободных SBAID: доступно {h.total - h.blocked}")
     h.blocked += shares
 
 
@@ -60,9 +60,9 @@ async def transfer(ctx: Ctx, from_id: int, to_id: int, shares: int, type_: str, 
     """Перенести акции. from_blocked — акции уже заблокированы у отправителя
     (под заявку, сделку, подарок) и снимаются из заблокированных."""
     if shares <= 0:
-        raise DomainError("Количество акций должно быть положительным")
+        raise DomainError("Количество SBAID должно быть положительным")
     if from_id == to_id:
-        raise DomainError("Нельзя переносить акции самому себе")
+        raise DomainError("Нельзя переносить SBAID самому себе")
     hs = await lock_holdings(ctx, from_id, to_id)
     src, dst = hs[from_id], hs[to_id]
     if from_blocked:
@@ -70,7 +70,7 @@ async def transfer(ctx: Ctx, from_id: int, to_id: int, shares: int, type_: str, 
             raise RuntimeError("Заблокировано меньше, чем переносится")
         src.blocked -= shares
     elif src.total - src.blocked < shares:
-        raise DomainError(f"Недостаточно свободных акций: доступно {src.total - src.blocked}")
+        raise DomainError(f"Недостаточно свободных SBAID: доступно {src.total - src.blocked}")
     src.total -= shares
     dst.total += shares
     t = Transfer(from_user_id=from_id, to_user_id=to_id, shares=shares, type=type_, basis=basis,
@@ -85,7 +85,7 @@ async def transfer(ctx: Ctx, from_id: int, to_id: int, shares: int, type_: str, 
 async def _consume_placement_lots(ctx: Ctx, user_id: int, shares: int) -> None:
     """Акции, ушедшие от участника (продажа, подарок, корректировка), сначала
     списываются с акций, купленных на размещении, от старых к новым. Так за
-    акции, купленные на рынке, нельзя получить возврат от основателя."""
+    SBAID, купленные на рынке, нельзя получить возврат от основателя."""
     lots = (await ctx.s.execute(
         select(Purchase).where(Purchase.user_id == user_id, Purchase.shares_remaining > 0)
         .order_by(Purchase.paid_at, Purchase.id).with_for_update()
@@ -141,7 +141,7 @@ async def incoming_exposure(ctx: Ctx, user_id: int) -> int:
 async def ownership_base(ctx: Ctx) -> int:
     """База лимита владения: размещённые акции (вне казны) плюс ещё не проданный
     объём открытого размещения. Без второго слагаемого первые покупатели нового
-    клуба сразу упирались бы в лимит: при 100 проданных акциях 15% — это 15 штук."""
+    клуба сразу упирались бы в лимит: при 100 проданных SBAID 15% — это 15 штук."""
     return await outstanding(ctx) + await _offered_unsold(ctx)
 
 
@@ -157,14 +157,14 @@ async def check_ownership_limit(ctx: Ctx, user_id: int, extra: int) -> None:
         max_allowed = max(0, (limit_pct * denom) // 100 - (after - extra))
         raise DomainError(
             f"После этого ваша доля превысит лимит владения {limit_pct}%. "
-            f"Сейчас можно получить не больше {max_allowed} акций.")
+            f"Сейчас можно получить не больше {max_allowed} SBAID.")
 
 
 async def check_invariant(ctx: Ctx) -> None:
     """Сумма акций у всех и в казне = выпуску, и баланс = сумма журнала."""
     total = (await ctx.s.execute(select(func.sum(Holding.total)))).scalar_one()
     if int(total) != ctx.config.total_shares:
-        raise AssertionError(f"Сумма акций {total} ≠ {ctx.config.total_shares}")
+        raise AssertionError(f"Сумма SBAID {total} ≠ {ctx.config.total_shares}")
     rows = (await ctx.s.execute(select(Holding))).scalars().all()
     for h in rows:
         inc = (await ctx.s.execute(select(func.coalesce(func.sum(Transfer.shares), 0))

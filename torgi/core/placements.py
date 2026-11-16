@@ -49,13 +49,13 @@ async def create(ctx: Ctx, actor: User, volume: int, price: int | None, days: in
     busy = (await ctx.s.execute(select(func.coalesce(func.sum(Placement.volume - Placement.sold), 0)).where(
         Placement.status.in_(("draft", "open"))))).scalar_one()
     if volume > tre.total - int(busy):
-        raise DomainError(f"В казне свободно только {tre.total - int(busy)} акций")
+        raise DomainError(f"В казне свободно только {tre.total - int(busy)} SBAID")
     cap, period = await settings.get_many(ctx, "placement_period_cap", "placement_period_days")
     recent = int((await ctx.s.execute(select(func.coalesce(func.sum(Placement.volume), 0)).where(
         Placement.status.in_(("draft", "open", "closed")),
         Placement.starts_at > (starts_at or ctx.now) - timedelta(days=period)))).scalar_one())
     if recent + volume > cap:
-        raise DomainError(f"За {period} дней можно разместить не больше {cap} акций; "
+        raise DomainError(f"За {period} дней можно разместить не больше {cap} SBAID; "
                           f"уже размещено {recent}, доступно {max(0, cap - recent)}")
     lot, limit_pct = await settings.get_many(ctx, "placement_lot", "placement_user_limit_pct")
     per_user = max(lot, (volume * limit_pct // 100) // lot * lot)
@@ -84,7 +84,7 @@ async def publish(ctx: Ctx, actor: User, placement_id: int) -> Placement:
     steps = "\n".join(f"• {s}" for s in calc.get("steps", []))
     note = "" if calc.get("used") == calc.get("suggested") else \
         f"\nОснователь установил цену {rub(p.price)} (расчётная — {rub(calc.get('suggested', 0))})."
-    ctx.publish(f"📢 Размещение №{p.number}\nОбъём: {p.volume} акций по {rub(p.price)}\n"
+    ctx.publish(f"📢 Размещение №{p.number}\nОбъём: {p.volume} SBAID по {rub(p.price)}\n"
                 f"Лот: {p.lot}, лимит в одни руки: {p.per_user_limit}\nДо {fmt_msk(p.ends_at)}\n\n"
                 f"Расчёт цены:\n{steps}{note}\n\nКупить: /placement в боте")
     return p
@@ -107,8 +107,8 @@ async def close(ctx: Ctx, actor: User | None, placement_id: int) -> Placement:
           returned_to_treasury=p.volume - p.sold)
     buyers = (await ctx.s.execute(select(func.count(func.distinct(Purchase.user_id))).where(
         Purchase.placement_id == p.id, Purchase.status == "paid"))).scalar_one()
-    ctx.publish(f"✅ Размещение №{p.number} завершено\nПродано {p.sold} из {p.volume} акций по {rub(p.price)}, "
-                f"покупателей: {buyers}.\nНепроданные {p.volume - p.sold} акций остаются в казне.")
+    ctx.publish(f"✅ Размещение №{p.number} завершено\nПродано {p.sold} из {p.volume} SBAID по {rub(p.price)}, "
+                f"покупателей: {buyers}.\nНепроданные {p.volume - p.sold} SBAID остаются в казне.")
     return p
 
 
@@ -152,19 +152,19 @@ async def reserve(ctx: Ctx, user: User, shares: int) -> tuple[Purchase, str]:
     """Резерв акций на время оплаты и ссылка на оплату."""
     users.require_member(user)
     if user.role == Role.FOUNDER:
-        raise DomainError("Основатель не покупает на размещении — его акции и так в казне")
+        raise DomainError("Основатель не покупает на размещении — его SBAID и так в казне")
     cur = await current(ctx)
     if cur is None or cur.ends_at <= ctx.now:
         raise DomainError("Сейчас нет открытого размещения")
     p = await _get_locked(ctx, cur.id)
     if shares <= 0 or shares % p.lot:
-        raise DomainError(f"Количество должно быть кратно лоту ({p.lot} акций)")
+        raise DomainError(f"Количество должно быть кратно лоту ({p.lot} SBAID)")
     mine = await user_bought(ctx, p.id, user.id)
     if mine + shares > p.per_user_limit:
-        raise DomainError(f"Лимит в одни руки — {p.per_user_limit} акций, у вас уже {mine}")
+        raise DomainError(f"Лимит в одни руки — {p.per_user_limit} SBAID, у вас уже {mine}")
     left = await available(ctx, p)
     if shares > left:
-        raise DomainError(f"Осталось только {left} акций")
+        raise DomainError(f"Осталось только {left} SBAID")
     await registry.check_ownership_limit(ctx, user.id, shares)
     minutes = await settings.get(ctx, "reserve_minutes")
     amount = shares * p.price
@@ -205,9 +205,9 @@ async def on_payment(ctx: Ctx, inv_id: int, amount: int, op: str | None = None) 
             pur.status = "paid_late"
             pur.paid_at = ctx.now
             audit(ctx, None, "purchase.paid_late", purchase_id=pur.id)
-            ctx.staff(f"❗ Счёт №{pur.id} оплачен после снятия резерва, акций не осталось. Нужен возврат "
+            ctx.staff(f"❗ Счёт №{pur.id} оплачен после снятия резерва, SBAID не осталось. Нужен возврат "
                       f"{rub(pur.amount)} пользователю id{pur.user_id}.")
-            ctx.send(pur.user_id, "Оплата пришла после окончания резерва, и акций уже не осталось. "
+            ctx.send(pur.user_id, "Оплата пришла после окончания резерва, и SBAID уже не осталось. "
                                   "Основатель вернёт деньги, мы сообщим.")
             return "late"
     t = await registry.treasury(ctx)
@@ -217,7 +217,7 @@ async def on_payment(ctx: Ctx, inv_id: int, amount: int, op: str | None = None) 
     pur.shares_remaining = pur.shares
     p.sold += pur.shares
     audit(ctx, None, "purchase.paid", purchase_id=pur.id, shares=pur.shares, amount=pur.amount)
-    ctx.send(pur.user_id, f"✅ Оплата получена. Вам начислено {pur.shares} акций по {rub(p.price)}.\n"
+    ctx.send(pur.user_id, f"✅ Оплата получена. Вам начислено {pur.shares} SBAID по {rub(p.price)}.\n"
                           f"Портфель: /portfolio")
     u = await users.get(ctx, pur.user_id)
     if not u.group_invite_sent:
@@ -234,5 +234,5 @@ async def expire_reservations(ctx: Ctx) -> int:
     for r in rows:
         r.status = "expired"
         audit(ctx, None, "purchase.expired", purchase_id=r.id)
-        ctx.send(r.user_id, f"Резерв {r.shares} акций снят: оплата не пришла вовремя.")
+        ctx.send(r.user_id, f"Резерв {r.shares} SBAID снят: оплата не пришла вовремя.")
     return len(rows)

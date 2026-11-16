@@ -107,9 +107,9 @@ async def test_full_cycle_via_telegram(app):
 
     # покупка на размещении, оплата через ResultURL, повторное уведомление
     async with TestClient(TestServer(build_web(app))) as client:
-        assert "Сколько акций" in await h.say(SELLER, "/placement")
+        assert "Сколько SBAID" in await h.say(SELLER, "/placement")
         assert "кратно" in await h.say(SELLER, "7")
-        assert "Зарезервировано 100 акций" in await h.say(SELLER, "100")
+        assert "Зарезервировано 100 SBAID" in await h.say(SELLER, "100")
         assert "auth.robokassa.ru" in h.session.last_markup(SELLER).inline_keyboard[0][0].url
         assert (await h.pay(client, 1, 100 * 100_00))[1] == "OK1"
         assert (await h.pay(client, 1, 100 * 100_00))[1] == "OK1"  # повтор — без второго начисления
@@ -119,7 +119,7 @@ async def test_full_cycle_via_telegram(app):
         await h.say(BUYER, "500")
         assert (await h.pay(client, 2, 500 * 100_00))[0] == 200
     assert any("одноразовая ссылка" in t for t in h.session.texts(SELLER))
-    assert "Акций: 100 " in await h.say(SELLER, "/portfolio")
+    assert "SBAID: 100 " in await h.say(SELLER, "/portfolio")
 
     # основатель не может подать заявку
     assert "не торгуют" in await h.say(FOUNDER, "/sell")
@@ -155,8 +155,8 @@ async def test_full_cycle_via_telegram(app):
     assert "Отметили оплату" in await h.click(BUYER, "tr:paid:1")
     assert "не ваша" in "".join(str(getattr(c, "text", "")) for c in await _alerts(h, BUYER, "tr:confirm:1"))
     assert "сделка завершена" in await h.click(SELLER, "tr:confirm:1")
-    assert "Акций: 530 " in await h.say(BUYER, "/portfolio")
-    assert "Акций: 70 (заблокировано 0)" in await h.say(SELLER, "/portfolio")  # остаток заявки истёк
+    assert "SBAID: 530 " in await h.say(BUYER, "/portfolio")
+    assert "SBAID: 70 (заблокировано 0)" in await h.say(SELLER, "/portfolio")  # остаток заявки истёк
 
     await tick(app)  # планировщик отрабатывает без ошибок
     async with app.tx() as ctx:

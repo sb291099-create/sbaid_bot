@@ -41,7 +41,7 @@ async def seller_requisites(ctx: Ctx, viewer: User, trade_id: int) -> str:
 
 
 def buyer_card(t: Trade, requisites: str) -> tuple[str, list]:
-    text = (f"🤝 Сделка №{t.id}: вы покупаете {t.shares} акций по {rub(t.price)}.\n"
+    text = (f"🤝 Сделка №{t.id}: вы покупаете {t.shares} SBAID по {rub(t.price)}.\n"
             f"Переведите продавцу {rub(t.amount)} до {fmt_msk(t.pay_deadline)}.\n"
             f"Реквизиты: {requisites}\n\n"
             f"После перевода нажмите «Я оплатил» и при желании пришлите скриншот перевода.")
@@ -50,8 +50,8 @@ def buyer_card(t: Trade, requisites: str) -> tuple[str, list]:
 
 
 def seller_card(t: Trade) -> str:
-    return (f"🤝 Сделка №{t.id}: вы продаёте {t.shares} акций по {rub(t.price)} на сумму {rub(t.amount)}.\n"
-            f"Покупатель должен перевести деньги до {fmt_msk(t.pay_deadline)}. Акции заблокированы до "
+    return (f"🤝 Сделка №{t.id}: вы продаёте {t.shares} SBAID по {rub(t.price)} на сумму {rub(t.amount)}.\n"
+            f"Покупатель должен перевести деньги до {fmt_msk(t.pay_deadline)}. SBAID заблокированы до "
             f"завершения сделки. Как только деньги придут, подтвердите получение.")
 
 
@@ -93,7 +93,7 @@ async def _complete(ctx: Ctx, t: Trade, actor_id: int | None, basis_note: str) -
     deed = (f"📄 Уступка по сделке №{t.id}\n"
             f"Продавец: {seller.full_name} ({seller.display})\n"
             f"Покупатель: {buyer.full_name} ({buyer.display})\n"
-            f"Акций: {t.shares}, цена {rub(t.price)}, сумма {rub(t.amount)}\n"
+            f"SBAID: {t.shares}, цена {rub(t.price)}, сумма {rub(t.amount)}\n"
             f"Дата: {fmt_msk(ctx.now)}\nОснование: {basis_note}.")
     ctx.send(t.buyer_id, deed)
     ctx.send(t.seller_id, deed)
@@ -106,7 +106,7 @@ async def _cancel(ctx: Ctx, t: Trade, actor_id: int | None, reason: str) -> None
     await registry.unblock(ctx, t.seller_id, t.shares)
     _set_status(ctx, t, TS.CANCELLED, actor_id, reason=reason)
     for uid in (t.buyer_id, t.seller_id):
-        ctx.send(uid, f"Сделка №{t.id} отменена: {reason}. Акции продавца разблокированы.")
+        ctx.send(uid, f"Сделка №{t.id} отменена: {reason}. SBAID продавца разблокированы.")
 
 
 async def open_dispute(ctx: Ctx, t: Trade, opened_by: int | None, reason: str) -> Dispute:
@@ -119,9 +119,9 @@ async def open_dispute(ctx: Ctx, t: Trade, opened_by: int | None, reason: str) -
     for uid in (t.buyer_id, t.seller_id):
         hint = "скриншот или квитанцию перевода" if uid == t.buyer_id else "выписку из банка за день"
         ctx.send(uid, f"⚖️ По сделке №{t.id} открыт спор: {reason}.\nПришлите {hint}. Админ решит до "
-                      f"{fmt_msk(d.deadline)}; акции продавца до решения заблокированы.",
+                      f"{fmt_msk(d.deadline)}; SBAID продавца до решения заблокированы.",
                  [[Button("Прислать доказательство", f"tr:proof:{t.id}")]])
-    ctx.staff(f"⚖️ Новый спор №{d.id} по сделке №{t.id} ({t.shares} акций, {rub(t.amount)}): {reason}.\n"
+    ctx.staff(f"⚖️ Новый спор №{d.id} по сделке №{t.id} ({t.shares} SBAID, {rub(t.amount)}): {reason}.\n"
               f"Решить до {fmt_msk(d.deadline)}. /disputes")
     return d
 
@@ -170,7 +170,7 @@ async def resolve_dispute(ctx: Ctx, admin: User, dispute_id: int, decision: str,
         await _cancel(ctx, t, admin.id, f"решение админа по спору №{d.id}: {comment.strip()}")
         loser = t.buyer_id
     for uid in (t.buyer_id, t.seller_id):
-        ctx.send(uid, f"⚖️ Спор №{d.id} решён: {'акции переносятся' if decision == 'transfer' else 'сделка отменена'}."
+        ctx.send(uid, f"⚖️ Спор №{d.id} решён: {'SBAID переносятся' if decision == 'transfer' else 'сделка отменена'}."
                       f"\nКомментарий админа: {comment.strip()}")
     if penalize:
         await users.add_penalty(ctx, loser, 2, f"проигран спор №{d.id}", trade_id=t.id, actor_id=admin.id)

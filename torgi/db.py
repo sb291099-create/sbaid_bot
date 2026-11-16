@@ -45,4 +45,4 @@ async def init_db(engine: AsyncEngine, total_shares: int) -> None:
             await s.flush()
             s.add(Holding(user_id=treasury.id, total=total_shares, blocked=0))
             s.add(Transfer(from_user_id=None, to_user_id=treasury.id, shares=total_shares,
-                           type="issue", basis="Выпуск акций клуба"))
+                           type="issue", basis="Выпуск SBAID"))

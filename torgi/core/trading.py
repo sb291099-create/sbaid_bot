@@ -66,7 +66,7 @@ async def run(ctx: Ctx, cutoff_at: datetime, actor: User | None = None) -> Tradi
             if o.side == "sell":
                 await registry.unblock(ctx, o.user_id, o.remaining)
             o.status = "expired"
-            ctx.send(o.user_id, f"Срок заявки №{o.id} истёк, неисполненный остаток {o.remaining} акций снят.")
+            ctx.send(o.user_id, f"Срок заявки №{o.id} истёк, неисполненный остаток {o.remaining} SBAID снят.")
 
     if result.happened:
         ctx.s.add(PriceHistory(date=ctx.now, source="session", price=result.price, volume=result.volume))
@@ -79,7 +79,7 @@ async def run(ctx: Ctx, cutoff_at: datetime, actor: User | None = None) -> Tradi
     median = await median_30d(ctx)
     if result.happened:
         ctx.publish(f"📊 Торговый день {fmt_msk(cutoff_at)}\nЕдиная цена: {rub(result.price)}\n"
-                    f"Объём: {result.volume} акций, сделок: {len(result.pairs)}\n"
+                    f"Объём: {result.volume} SBAID, сделок: {len(result.pairs)}\n"
                     f"Медиана за 30 дней: {rub(median) if median else '—'}")
     else:
         ctx.publish(f"📊 Торговый день {fmt_msk(cutoff_at)} не состоялся: заявки не пересеклись. "

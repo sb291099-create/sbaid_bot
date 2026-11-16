@@ -14,7 +14,7 @@ class PriceCalc:
 
 def weighted_median(observations: list[tuple[int, int]]) -> int:
     """Медиана, где каждая проданная акция — одно наблюдение.
-    observations: [(цена, акций)]. При чётном числе — нижняя медиана."""
+    observations: [(цена, SBAID)]. При чётном числе — нижняя медиана."""
     obs = sorted(observations)
     n = sum(q for _, q in obs)
     if n == 0:
@@ -47,7 +47,7 @@ def next_placement_price(prev: int, trades: list[tuple[int, int, int]], *, min_t
         return calc
     m = weighted_median([(p, q) for p, q, _ in trades])
     calc.median = m
-    calc.steps.append(f"Медиана, взвешенная по числу акций: {rub(m)}")
+    calc.steps.append(f"Медиана, взвешенная по числу SBAID: {rub(m)}")
     lo, hi = prev * (100 - down_pct) / 100, prev * (100 + up_pct) / 100
     bounded = min(hi, max(lo, m))
     if bounded != m:

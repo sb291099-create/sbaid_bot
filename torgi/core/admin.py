@@ -58,7 +58,7 @@ async def adjust(ctx: Ctx, admin: User, nick: str, delta: int, reason: str) -> T
     else:
         tr = await registry.transfer(ctx, u.id, t.id, -delta, "adjustment", f"admin: {reason.strip()}")
     audit(ctx, admin.id, "balance.adjust", user_id=u.id, delta=delta, reason=reason, transfer_id=tr.id)
-    ctx.send(u.id, f"ℹ️ Админ скорректировал ваш баланс: {delta:+d} акций. Причина: {reason.strip()}")
+    ctx.send(u.id, f"ℹ️ Админ скорректировал ваш баланс: {delta:+d} SBAID. Причина: {reason.strip()}")
     return tr
 
 
@@ -87,9 +87,9 @@ async def export_registry(ctx: Ctx, actor: User, public: bool) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     if public:
-        w.writerow(["ник", "акций", "доля голосов, %"])
+        w.writerow(["ник", "SBAID", "доля голосов, %"])
     else:
-        w.writerow(["id", "ник", "ФИО", "контакт", "роль", "связан с основателем", "акций", "заблокировано",
+        w.writerow(["id", "ник", "ФИО", "контакт", "роль", "связан с основателем", "SBAID", "заблокировано",
                     "доля голосов, %", "оферта", "версия оферты"])
     for u, h in rows:
         share = "" if u.role == Role.TREASURY or out == 0 else f"{h.total * 100 / out:.4f}"
@@ -110,7 +110,7 @@ async def export_journal(ctx: Ctx, actor: User) -> str:
              for u in (await ctx.s.execute(select(User))).scalars()}
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["№", "время", "от кого", "кому", "акций", "тип", "основание"])
+    w.writerow(["№", "время", "от кого", "кому", "SBAID", "тип", "основание"])
     for t in rows:
         w.writerow([t.id, fmt_msk(t.created_at), names.get(t.from_user_id, "выпуск"), names.get(t.to_user_id, ""),
                     t.shares, t.type, t.basis])

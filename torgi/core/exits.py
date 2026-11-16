@@ -32,11 +32,11 @@ async def options(ctx: Ctx, user: User) -> dict:
 async def request(ctx: Ctx, user: User, shares: int) -> list[Refund]:
     users.require_member(user)
     if shares <= 0:
-        raise DomainError("Количество акций должно быть положительным")
+        raise DomainError("Количество SBAID должно быть положительным")
     opts = await options(ctx, user)
     if shares > opts["redeemable"]:
-        raise DomainError(f"Погасить с возвратом можно не больше {opts['redeemable']} акций — "
-                          f"это свободные акции, купленные на размещении. Акции с рынка можно только "
+        raise DomainError(f"Погасить с возвратом можно не больше {opts['redeemable']} SBAID — "
+                          f"это свободные SBAID, купленные на размещении. SBAID с рынка можно только "
                           f"продать (/sell) или подарить (/gift).")
     days = opts["refund_days"]
     t = await registry.treasury(ctx)
@@ -67,11 +67,11 @@ async def request(ctx: Ctx, user: User, shares: int) -> list[Refund]:
     admin_n = sum(r.shares for r in out if r.kind == "admin")
     msg = []
     if auto_sum:
-        msg.append(f"Акции погашены, возврат {rub(auto_sum)} оформляется через Robokassa с чеком возврата.")
+        msg.append(f"SBAID погашены, возврат {rub(auto_sum)} оформляется через Robokassa с чеком возврата.")
     if admin_n:
-        msg.append(f"{admin_n} акций куплены больше {days} дней назад — заявка на возврат ушла основателю, "
-                   f"акции заблокированы до решения.")
-        ctx.staff(f"🚪 Заявка на выход: {user.display} ({user.full_name}), {admin_n} акций. /refunds")
+        msg.append(f"{admin_n} SBAID куплены больше {days} дней назад — заявка на возврат ушла основателю, "
+                   f"SBAID заблокированы до решения.")
+        ctx.staff(f"🚪 Заявка на выход: {user.display} ({user.full_name}), {admin_n} SBAID. /refunds")
     ctx.send(user.id, "\n".join(msg))
     return out
 
@@ -88,7 +88,7 @@ async def decide(ctx: Ctx, admin: User, refund_id: int, amount: int | None, comm
         lot = (await ctx.s.execute(select(Purchase).where(Purchase.id == r.purchase_id).with_for_update())).scalar_one()
         lot.shares_remaining += r.shares
         audit(ctx, admin.id, "refund.reject", refund_id=r.id, comment=comment)
-        ctx.send(r.user_id, f"Заявка на возврат за {r.shares} акций отклонена: {comment}. Акции разблокированы.")
+        ctx.send(r.user_id, f"Заявка на возврат за {r.shares} SBAID отклонена: {comment}. SBAID разблокированы.")
         return r
     if amount < 0 or amount > r.max_amount:
         raise DomainError(f"Сумма возврата не может быть больше уплаченной: {rub(r.max_amount)}")
@@ -98,7 +98,7 @@ async def decide(ctx: Ctx, admin: User, refund_id: int, amount: int | None, comm
     r.amount = amount
     r.status = "processing" if amount > 0 else "done"
     audit(ctx, admin.id, "refund.approve", refund_id=r.id, amount=amount, comment=comment)
-    ctx.send(r.user_id, f"Основатель одобрил выход: {r.shares} акций погашены"
+    ctx.send(r.user_id, f"Основатель одобрил выход: {r.shares} SBAID погашены"
                         + (f", возврат {rub(amount)} оформляется." if amount else " без возврата денег.")
                         + (f"\nКомментарий: {comment}" if comment else ""))
     return r

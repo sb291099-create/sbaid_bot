@@ -87,8 +87,8 @@ ORDER_STATUS = {"active": "активна", "partial": "исполнена ча�
 TRADE_STATUS = {"awaiting_payment": "ждёт оплаты", "awaiting_confirmation": "ждёт подтверждения",
                 "completed": "завершена", "cancelled": "отменена", "disputed": "спор"}
 
-HELP = ("Команды:\n/placement — купить акции на размещении\n/buy, /sell — заявка на рынке\n"
-        "/orders — мои заявки\n/trades — мои сделки\n/portfolio — портфель\n/gift — подарить акции\n"
+HELP = ("Команды:\n/placement — купить SBAID на размещении\n/buy, /sell — заявка на рынке\n"
+        "/orders — мои заявки\n/trades — мои сделки\n/portfolio — портфель\n/gift — подарить SBAID\n"
         "/exit — выйти из клуба\n/rules — правила и оферта\n/linked — аккаунты, связанные с основателем\n"
         "/registry — публичный реестр")
 
@@ -107,9 +107,10 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
     if users.is_registered(user):
         return await m.answer("Вы уже зарегистрированы.\n\n" + HELP)
     await m.answer(
-        "Это клуб, в котором акции дают право голоса в решениях основателя. Акции продаются на "
+        "Это клуб SBAID. 1 SBAID = 1 голос в решениях основателя. SBAID продаются на "
         "размещениях, а раз в неделю участники могут купить и продать их друг другу.\n\n"
-        "Акция — право участия и голоса в клубе. Это не ценная бумага и не инвестиция.\n\n"
+        "SBAID — единица участия и голоса в клубе. Это не ценная бумага, не доля в имуществе "
+        "и не инвестиция, дохода она не гарантирует.\n\n"
         + legal_links(app),
         reply_markup=markup([[Button("Принимаю оферту и правила", "reg:offer")]]))
 
@@ -167,9 +168,9 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
         left = await placements.available(ctx, p)
         mine = await placements.user_bought(ctx, p.id, user.id)
     await state.set_state(Buy.placement_qty)
-    await m.answer(f"Размещение №{p.number}\nЦена: {rub(p.price)} за акцию\nОсталось: {left} из {p.volume}\n"
-                   f"Лот: {p.lot} акций\nЛимит в одни руки: {p.per_user_limit} (у вас уже {mine})\n"
-                   f"До {fmt_msk(p.ends_at)}\n\nСколько акций хотите купить? Напишите число, кратное {p.lot}.")
+    await m.answer(f"Размещение №{p.number}\nЦена: {rub(p.price)} за 1 SBAID\nОсталось: {left} из {p.volume}\n"
+                   f"Лот: {p.lot} SBAID\nЛимит в одни руки: {p.per_user_limit} (у вас уже {mine})\n"
+                   f"До {fmt_msk(p.ends_at)}\n\nСколько SBAID хотите купить? Напишите число, кратное {p.lot}.")
 
 
 @router.message(Buy.placement_qty, F.text, ~F.text.startswith("/"))
@@ -179,8 +180,8 @@ async def placement_qty(m: Message, user: User, app: App, state: FSMContext):
         pur, url = await placements.reserve(ctx, await users.get(ctx, user.id), qty)
     await state.clear()
     kb = markup([[Button(f"Оплатить {rub(pur.amount)}", url=url)]]) if url.startswith("http") else None
-    await m.answer(f"Зарезервировано {pur.shares} акций на сумму {rub(pur.amount)} до {fmt_msk(pur.reserved_until)}. "
-                   f"Акции будут начислены сразу после оплаты." + ("" if kb else f"\n{url}"), reply_markup=kb)
+    await m.answer(f"Зарезервировано {pur.shares} SBAID на сумму {rub(pur.amount)} до {fmt_msk(pur.reserved_until)}. "
+                   f"SBAID будут начислены сразу после оплаты." + ("" if kb else f"\n{url}"), reply_markup=kb)
 
 
 # --- заявки --------------------------------------------------------------------------
@@ -200,8 +201,8 @@ async def order_start(m: Message, command: CommandObject, user: User, app: App, 
         return await m.answer("Куда принимать оплату? Напишите телефон для перевода по СБП. "
                               "Его увидит только покупатель из вашей сделки.")
     await state.set_state(OrderFlow.qty)
-    hint = f"Свободно акций: {h.total - h.blocked}. " if side == "sell" else ""
-    await m.answer(f"Заявка на {SIDE[side]}у. Референсная цена: {rub(ref)}. {hint}Сколько акций?")
+    hint = f"Свободно SBAID: {h.total - h.blocked}. " if side == "sell" else ""
+    await m.answer(f"Заявка на {SIDE[side]}у. Референсная цена: {rub(ref)}. {hint}Сколько SBAID?")
 
 
 @router.message(OrderFlow.payout_phone, F.text, ~F.text.startswith("/"))
@@ -217,7 +218,7 @@ async def payout_bank(m: Message, user: User, app: App, state: FSMContext):
     async with app.tx() as ctx:
         await users.set_payout_details(ctx, user.id, data["phone"], m.text)
     await state.set_state(OrderFlow.qty)
-    await m.answer("Реквизиты сохранены (в зашифрованном виде). Сколько акций продаёте?")
+    await m.answer("Реквизиты сохранены (в зашифрованном виде). Сколько SBAID продаёте?")
 
 
 @router.message(OrderFlow.qty, F.text, ~F.text.startswith("/"))
@@ -225,7 +226,7 @@ async def order_qty(m: Message, state: FSMContext):
     await state.update_data(qty=parse_int(m.text))
     data = await state.get_data()
     await state.set_state(OrderFlow.price)
-    await m.answer("Минимальная цена за акцию, ₽?" if data["side"] == "sell" else "Максимальная цена за акцию, ₽?")
+    await m.answer("Минимальная цена за 1 SBAID, ₽?" if data["side"] == "sell" else "Максимальная цена за 1 SBAID, ₽?")
 
 
 @router.message(OrderFlow.price, F.text, ~F.text.startswith("/"))
@@ -247,7 +248,7 @@ async def order_create(c: CallbackQuery, user: User, app: App, state: FSMContext
     async with app.tx() as ctx:
         o = await orders.create(ctx, await users.get(ctx, user.id), data["side"], data["qty"], data["price"], weeks)
     await state.clear()
-    await c.message.edit_text(f"Заявка №{o.id} принята: {SIDE[o.side]} {o.shares} акций, цена "
+    await c.message.edit_text(f"Заявка №{o.id} принята: {SIDE[o.side]} {o.shares} SBAID, цена "
                               f"{'не ниже' if o.side == 'sell' else 'не выше'} {rub(o.limit_price)}, "
                               f"действует до {fmt_msk(o.expires_at)}. Отменить можно в /orders до отсечки.")
     await c.answer()
@@ -261,7 +262,7 @@ async def my_orders(m: Message, user: User, app: App):
     if not rows:
         return await m.answer(f"Активных заявок нет. Ближайший торговый день: {fmt_msk(cutoff)}.")
     for o in rows:
-        await m.answer(f"№{o.id}: {SIDE[o.side]} {o.shares} акций по {rub(o.limit_price)}, исполнено {o.filled}, "
+        await m.answer(f"№{o.id}: {SIDE[o.side]} {o.shares} SBAID по {rub(o.limit_price)}, исполнено {o.filled}, "
                        f"{ORDER_STATUS[o.status]}, до {fmt_msk(o.expires_at)}",
                        reply_markup=markup([[Button("Отменить", f"ord:cancel:{o.id}")]]))
     await m.answer(f"Ближайший торговый день: {fmt_msk(cutoff)}.")
@@ -283,7 +284,7 @@ async def my_trades(m: Message, user: User, app: App):
         cards = []
         for t in rows:
             role = "покупка" if t.buyer_id == user.id else "продажа"
-            text = (f"Сделка №{t.id}: {role} {t.shares} акций по {rub(t.price)} = {rub(t.amount)}, "
+            text = (f"Сделка №{t.id}: {role} {t.shares} SBAID по {rub(t.price)} = {rub(t.amount)}, "
                     f"{TRADE_STATUS[t.status]}")
             kb = []
             if t.status == TradeStatus.AWAITING_PAYMENT and t.buyer_id == user.id:
@@ -315,10 +316,10 @@ async def trade_action(c: CallbackQuery, user: User, app: App, state: FSMContext
         u = await users.get(ctx, user.id)
         if action == "paid":
             await trades.buyer_paid(ctx, u, tid)
-            reply = "Отметили оплату. Продавец получил уведомление; акции придут после его подтверждения."
+            reply = "Отметили оплату. Продавец получил уведомление; SBAID придут после его подтверждения."
         elif action == "confirm":
             await trades.seller_confirm(ctx, u, tid)
-            reply = "Спасибо, сделка завершена, акции перенесены покупателю."
+            reply = "Спасибо, сделка завершена, SBAID перенесены покупателю."
         elif action == "nomoney":
             await trades.seller_no_money(ctx, u, tid)
             reply = "Открыт спор. Пришлите выписку за день — админ разберётся."
@@ -351,7 +352,7 @@ async def gift_start(m: Message, user: User, state: FSMContext):
 async def gift_nick(m: Message, state: FSMContext):
     await state.update_data(nick=m.text.strip())
     await state.set_state(GiftFlow.qty)
-    await m.answer("Сколько акций?")
+    await m.answer("Сколько SBAID?")
 
 
 @router.message(GiftFlow.qty, F.text, ~F.text.startswith("/"))
@@ -361,7 +362,7 @@ async def gift_qty(m: Message, user: User, app: App, state: FSMContext):
     async with app.tx() as ctx:
         g = await gifts.offer(ctx, await users.get(ctx, user.id), data["nick"], qty)
     await state.clear()
-    await m.answer(f"Получателю отправлен запрос. {g.shares} акций заблокированы до его ответа.",
+    await m.answer(f"Получателю отправлен запрос. {g.shares} SBAID заблокированы до его ответа.",
                    reply_markup=markup([[Button("Отменить подарок", f"gift:decline:{g.id}")]]))
 
 
@@ -372,7 +373,7 @@ async def gift_action(c: CallbackQuery, user: User, app: App):
         u = await users.get(ctx, user.id)
         if action == "accept":
             g = await gifts.accept(ctx, u, int(gid))
-            reply = f"Вы получили {g.shares} акций."
+            reply = f"Вы получили {g.shares} SBAID."
         else:
             await gifts.decline(ctx, u, int(gid))
             reply = "Подарок отменён."
@@ -390,7 +391,7 @@ async def portfolio(m: Message, user: User, app: App):
         points = await users.penalty_points(ctx, u.id)
         ords = await orders.active_orders(ctx, u.id)
         trs = await trades.user_trades(ctx, u.id, limit=10)
-    lines = [f"Акций: {h.total} (заблокировано {h.blocked})", f"Доля голосов: {share * 100:.4f}%",
+    lines = [f"SBAID: {h.total} (заблокировано {h.blocked})", f"Доля голосов: {share * 100:.4f}%",
              f"Завершённых сделок: {u.completed_trades}", f"Штрафных баллов за полгода: {points}"]
     if u.banned_until and u.banned_until > app.clock():
         lines.append(f"Торговля запрещена до {fmt_msk(u.banned_until)}")
@@ -411,13 +412,13 @@ async def exit_start(m: Message, user: User, app: App, state: FSMContext):
         users.require_member(u)
         o = await exits.options(ctx, u)
     if o["redeemable"] == 0:
-        return await m.answer("У вас нет свободных акций, купленных на размещении. Акции, купленные на рынке "
+        return await m.answer("У вас нет свободных SBAID, купленных на размещении. SBAID, купленные на рынке "
                               "или полученные в подарок, можно только продать (/sell) или подарить (/gift).")
     await state.set_state(ExitFlow.qty)
-    await m.answer(f"Погасить можно до {o['redeemable']} акций, купленных на размещении.\n"
+    await m.answer(f"Погасить можно до {o['redeemable']} SBAID, купленных на размещении.\n"
                    f"Из них {o['auto_refund']} куплены не больше {o['refund_days']} дней назад — за них деньги "
                    f"вернутся автоматически и полностью. За остальные возврат решает основатель.\n\n"
-                   f"Сколько акций погасить? Погашенные акции возвращаются в казну и перестают голосовать.")
+                   f"Сколько SBAID погасить? Погашенные SBAID возвращаются в казну и перестают голосовать.")
 
 
 @router.message(ExitFlow.qty, F.text, ~F.text.startswith("/"))
@@ -455,7 +456,7 @@ ADMIN_HELP = ("Админ-команды:\n"
               "/tradingday — провести сорвавшийся торговый день\n"
               "/export registry|journal|public\n"
               "/broadcast <текст>\n"
-              "/adjust @ник <±акций> <причина>\n"
+              "/adjust @ник <±SBAID> <причина>\n"
               "/penalty @ник <баллы> <причина>\n"
               "/journal — последние записи аудита")
 
@@ -483,7 +484,7 @@ async def new_placement(m: Message, command: CommandObject, user: User, app: App
     async with app.tx() as ctx:
         p = await placements.create(ctx, await users.get(ctx, user.id), volume, price, days)
     steps = "\n".join(f"• {s}" for s in p.price_calc["steps"])
-    await m.answer(f"Черновик размещения №{p.number}: {p.volume} акций по {rub(p.price)}, лот {p.lot}, "
+    await m.answer(f"Черновик размещения №{p.number}: {p.volume} SBAID по {rub(p.price)}, лот {p.lot}, "
                    f"лимит в одни руки {p.per_user_limit}, до {fmt_msk(p.ends_at)}.\n\nРасчёт цены:\n{steps}",
                    reply_markup=markup([[Button("Опубликовать", f"pl:publish:{p.id}")]]))
 
@@ -519,11 +520,11 @@ async def disputes(m: Message, user: User, app: App, bot: Bot):
     if not items:
         return await m.answer("Открытых споров нет.")
     for d, t, b, s in items:
-        await m.answer(f"Спор №{d.id} по сделке №{t.id}: {t.shares} акций, {rub(t.amount)}\n"
+        await m.answer(f"Спор №{d.id} по сделке №{t.id}: {t.shares} SBAID, {rub(t.amount)}\n"
                        f"Покупатель: {b.display} ({b.full_name})\nПродавец: {s.display} ({s.full_name})\n"
                        f"Причина: {d.reason}\nРешить до {fmt_msk(d.deadline)}\n"
                        f"Доказательств: {len(d.evidence)}\n\n"
-                       f"/resolve {d.id} transfer <комментарий> — перенести акции\n"
+                       f"/resolve {d.id} transfer <комментарий> — перенести SBAID\n"
                        f"/resolve {d.id} cancel <комментарий> — отменить сделку")
         for e in d.evidence:
             who = "покупателя" if e["user_id"] == t.buyer_id else "продавца"
@@ -547,7 +548,7 @@ async def refunds(m: Message, user: User, app: App):
         lines = []
         for r in rows:
             u = await users.get(ctx, r.user_id)
-            lines.append(f"№{r.id}: {u.display}, {r.shares} акций, уплачено {rub(r.max_amount)}, статус {r.status}"
+            lines.append(f"№{r.id}: {u.display}, {r.shares} SBAID, уплачено {rub(r.max_amount)}, статус {r.status}"
                          + (f", к возврату {rub(r.amount)}" if r.amount is not None else ""))
     await m.answer("\n".join(lines) or "Заявок нет.")
 
@@ -649,7 +650,7 @@ async def broadcast(m: Message, command: CommandObject, user: User, app: App):
 
 @router.message(Command("adjust"))
 async def adjust(m: Message, command: CommandObject, user: User, app: App):
-    nick, delta, reason = args(command, 3, "/adjust @ник <±акций> <причина>")
+    nick, delta, reason = args(command, 3, "/adjust @ник <±SBAID> <причина>")
     async with app.tx() as ctx:
         await admin.adjust(ctx, await users.get(ctx, user.id), nick, parse_int(delta), reason)
     await m.answer("Корректировка записана в журнал, владелец уведомлён.")
