@@ -1,8 +1,11 @@
-"""Выход из клуба: погашение акций и возврат денег за акции с размещения.
+"""Выход из клуба и возврат денег за SBAID с размещения.
 
-За акции, купленные на рынке, основатель денег не получал — их можно только
-продать или подарить. До 14 дней с покупки — автоматический полный возврат,
-позже — по решению админа и не больше уплаченного.
+Основной выход — продажа на рынке по рыночной цене; основатель SBAID не выкупает.
+По закону участник может отказаться от участия и вернуть SBAID, купленные на
+размещении: по заявлению, через основателя, не больше уплаченного за эти SBAID
+(за вычетом фактических расходов) и в течение 10 дней. За SBAID, купленные на
+рынке или полученные в подарок, основатель денег не получал — их только продают
+или дарят.
 """
 from __future__ import annotations
 
@@ -11,68 +14,59 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from ..models import Purchase, Refund, User
-from ..timeutil import rub
-from . import registry, settings, users
+from ..timeutil import fmt_msk, rub
+from . import registry, users
 from .audit import audit
 from .context import Ctx
 from .errors import DomainError
 
+ANSWER_DAYS = 10  # срок ответа на заявление о возврате по закону о защите прав потребителей
+
 
 async def options(ctx: Ctx, user: User) -> dict:
-    days = await settings.get(ctx, "refund_days")
     lots = (await ctx.s.execute(select(Purchase).where(
-        Purchase.user_id == user.id, Purchase.shares_remaining > 0).order_by(Purchase.paid_at.desc()))).scalars().all()
+        Purchase.user_id == user.id, Purchase.shares_remaining > 0))).scalars().all()
     h = await registry.holding(ctx, user.id)
-    fresh = sum(l.shares_remaining for l in lots if l.paid_at > ctx.now - timedelta(days=days))
     total = sum(l.shares_remaining for l in lots)
     free = h.total - h.blocked
-    return {"redeemable": min(total, free), "auto_refund": min(fresh, free), "free": free, "refund_days": days}
+    return {"redeemable": min(total, free), "free": free}
 
 
 async def request(ctx: Ctx, user: User, shares: int) -> list[Refund]:
+    """Заявление о возврате: SBAID блокируются, решение и сумму определяет основатель."""
     users.require_member(user)
     if shares <= 0:
         raise DomainError("Количество SBAID должно быть положительным")
     opts = await options(ctx, user)
     if shares > opts["redeemable"]:
-        raise DomainError(f"Погасить с возвратом можно не больше {opts['redeemable']} SBAID — "
+        raise DomainError(f"Вернуть основателю можно не больше {opts['redeemable']} SBAID — "
                           f"это свободные SBAID, купленные на размещении. SBAID с рынка можно только "
                           f"продать (/sell) или подарить (/gift).")
-    days = opts["refund_days"]
-    t = await registry.treasury(ctx)
     lots = (await ctx.s.execute(select(Purchase).where(
         Purchase.user_id == user.id, Purchase.shares_remaining > 0)
         .order_by(Purchase.paid_at.desc(), Purchase.id.desc()).with_for_update())).scalars().all()
     left, out = shares, []
-    for lot in lots:  # от новых к старым: свежие покупки попадают в возврат без вопросов
+    for lot in lots:  # от новых покупок к старым
         if left == 0:
             break
         take = min(left, lot.shares_remaining)
         left -= take
         lot.shares_remaining -= take
         paid = take * lot.amount // lot.shares
-        auto = lot.paid_at > ctx.now - timedelta(days=days)
-        r = Refund(user_id=user.id, purchase_id=lot.id, shares=take, max_amount=paid,
-                   amount=paid if auto else None, reason="выход из клуба", kind="auto" if auto else "admin",
-                   status="processing" if auto else "pending_admin")
+        r = Refund(user_id=user.id, purchase_id=lot.id, shares=take, max_amount=paid, amount=None,
+                   reason="заявление о выходе", kind="admin", status="pending_admin")
         ctx.s.add(r)
         await ctx.s.flush()
-        if auto:
-            await registry.transfer(ctx, user.id, t.id, take, "exit", f"refund:{r.id}", consume_lots=False)
-        else:
-            await registry.block(ctx, user.id, take)
-        audit(ctx, user.id, "refund.request", refund_id=r.id, shares=take, kind=r.kind, max_amount=paid)
+        await registry.block(ctx, user.id, take)
+        audit(ctx, user.id, "refund.request", refund_id=r.id, shares=take, max_amount=paid)
         out.append(r)
-    auto_sum = sum(r.amount for r in out if r.kind == "auto")
-    admin_n = sum(r.shares for r in out if r.kind == "admin")
-    msg = []
-    if auto_sum:
-        msg.append(f"SBAID погашены, возврат {rub(auto_sum)} оформляется через Robokassa с чеком возврата.")
-    if admin_n:
-        msg.append(f"{admin_n} SBAID куплены больше {days} дней назад — заявка на возврат ушла основателю, "
-                   f"SBAID заблокированы до решения.")
-        ctx.staff(f"🚪 Заявка на выход: {user.display} ({user.full_name}), {admin_n} SBAID. /refunds")
-    ctx.send(user.id, "\n".join(msg))
+    paid_total = sum(r.max_amount for r in out)
+    due = ctx.now + timedelta(days=ANSWER_DAYS)
+    ctx.send(user.id, f"Заявление принято: {shares} SBAID заблокированы до решения основателя. "
+                      f"Уплачено за них {rub(paid_total)}; возврат — не больше этой суммы за вычетом "
+                      f"фактических расходов. Ответ — до {fmt_msk(due)}.")
+    ctx.staff(f"🚪 Заявление о возврате: {user.display} ({user.full_name}), {shares} SBAID, уплачено "
+              f"{rub(paid_total)}. Ответить до {fmt_msk(due)}. /refunds")
     return out
 
 

@@ -259,23 +259,24 @@ async def test_refund_rules(app):
     await open_placement(app)
     u = await member(app, 700, "leaver")
     await buy_on_placement(app, u, 100)
-    # в пределах 14 дней — автоматический полный возврат
-    async with app.tx() as ctx:
-        rs = await exits.request(ctx, await users.get(ctx, u.id), 40)
-        assert [(r.kind, r.amount) for r in rs] == [("auto", 40 * 100 * R)]
-    assert await shares_of(app, u) == (60, 0)
-    # позже — через админа и не больше уплаченного
-    app.clock_obj.now += timedelta(days=20)
+    # автоматического возврата нет: даже на следующий день — только заявление основателю
     async with app.tx() as ctx:
         rs = await exits.request(ctx, await users.get(ctx, u.id), 30)
-        assert rs[0].kind == "admin" and rs[0].max_amount == 30 * 100 * R
+        assert [(r.kind, r.status, r.amount, r.max_amount) for r in rs] == [("admin", "pending_admin", None, 30 * 100 * R)]
+    assert await shares_of(app, u) == (100, 30)  # заблокированы до решения
     f = await founder(app)
     async with app.tx() as ctx:
         with pytest.raises(DomainError, match="больше уплаченной"):
             await exits.decide(ctx, f, rs[0].id, 30 * 100 * R + 1, "")
     async with app.tx() as ctx:
-        await exits.decide(ctx, f, rs[0].id, 25 * 100 * R, "из резерва")
-    assert await shares_of(app, u) == (30, 0)
+        await exits.decide(ctx, f, rs[0].id, 25 * 100 * R, "за вычетом расходов")
+    assert await shares_of(app, u) == (70, 0)
+    # отказ возвращает SBAID владельцу
+    async with app.tx() as ctx:
+        rs2 = await exits.request(ctx, await users.get(ctx, u.id), 10)
+    async with app.tx() as ctx:
+        await exits.decide(ctx, f, rs2[0].id, None, "заявление отозвано")
+    assert await shares_of(app, u) == (70, 0)
     # база тоже не даст записать возврат больше уплаченного
     async with app.tx() as ctx:
         r = await ctx.s.get(Refund, rs[0].id)
