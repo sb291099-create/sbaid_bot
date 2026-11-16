@@ -229,8 +229,24 @@ async def test_no_simultaneous_buy_and_sell(app):
             await orders.create(ctx, await users.get(ctx, p["А"].id), "buy", 5, 100 * R)
 
 
+async def test_no_ownership_limit_by_default(app):
+    p = await setup_market(app)
+    async with app.tx() as ctx:  # 6000 из 25 000 — больше 15%, но лимит выключен
+        await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 6000, 100 * R)
+    async with app.tx() as ctx:
+        g = await gifts.offer(ctx, await users.by_username(ctx, "bg0"), "u4", 1000)
+    async with app.tx() as ctx:
+        await gifts.accept(ctx, await users.get(ctx, p["Д"].id), g.id)
+    assert await shares_of(app, p["Д"]) == (1000, 0)
+
+
 async def test_ownership_limit_on_buy_and_gift(app):
+    """Лимит владения, если основатель его включит (15%)."""
+    from torgi.models import SettingChange
     p = await setup_market(app)  # база лимита — партия 25 000 → 15% = 3750
+    async with app.tx() as ctx:
+        ctx.s.add(SettingChange(key="ownership_limit_pct", value={"v": 15}, published_at=ctx.now,
+                                effective_at=ctx.now))
     async with app.tx() as ctx:
         with pytest.raises(DomainError, match="лимит владения"):
             await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 3751, 100 * R)
@@ -409,7 +425,7 @@ async def test_settings_take_effect_after_7_days(app):
     async with app.tx() as ctx:
         await settings.change(ctx, f.id, "ownership_limit_pct", 20)
     async with app.tx() as ctx:
-        assert await settings.get(ctx, "ownership_limit_pct") == 15
+        assert await settings.get(ctx, "ownership_limit_pct") == 0
     app.clock_obj.now += timedelta(days=7, seconds=1)
     async with app.tx() as ctx:
         assert await settings.get(ctx, "ownership_limit_pct") == 20

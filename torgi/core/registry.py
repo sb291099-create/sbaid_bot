@@ -152,6 +152,8 @@ async def check_ownership_limit(ctx: Ctx, user_id: int, extra: int) -> None:
     заявок на покупку, открытых сделок, резервов, подарков) не должна превысить
     лимит владения."""
     limit_pct = await settings.get(ctx, "ownership_limit_pct")
+    if not limit_pct:  # по умолчанию лимита нет
+        return
     h = await holding(ctx, user_id)
     after = h.total + await incoming_exposure(ctx, user_id) + extra
     denom = await ownership_base(ctx)
