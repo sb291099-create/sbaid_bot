@@ -22,8 +22,19 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://torgi:${POSTGRES_PASSWORD}@db/torgi
+
+  # HTTPS для уведомлений Robokassa: сертификат выпускается и продлевается сам
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - bot
     ports:
-      - "127.0.0.1:8080:8080"   # наружу отдаёт nginx/caddy с HTTPS, см. README
+      - "80:80"
+      - "443:443"
+    command: caddy reverse-proxy --from ${DOMAIN:?задайте DOMAIN в .env} --to bot:8080
+    volumes:
+      - caddy_data:/data
 
   # Ежедневная резервная копия базы в папку ./backups
   backup:
@@ -41,3 +52,4 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:

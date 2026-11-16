@@ -174,14 +174,36 @@ async def reserve(ctx: Ctx, user: User, shares: int) -> tuple[Purchase, str]:
     await ctx.s.flush()
     audit(ctx, user.id, "purchase.reserve", purchase_id=pur.id, shares=shares, amount=amount)
     url = payment_link(ctx, pur)
+    if not payments_configured(ctx):
+        ctx.staff(f"🧪 Пробный режим: {user.display} зарезервировал {shares} SBAID, счёт №{pur.id} на "
+                  f"{rub(amount)}. Подтвердить оплату вручную: /testpay {pur.id}")
     return pur, url
+
+
+def payments_configured(ctx: Ctx) -> bool:
+    rk = ctx.app.payments
+    return rk is not None and rk.configured
+
+
+async def test_payment(ctx: Ctx, actor: User, purchase_id: int) -> str:
+    """Пробный режим: основатель вручную подтверждает оплату, пока Robokassa не подключена.
+    После подключения Robokassa команда отключается."""
+    users.require_founder(actor)
+    if payments_configured(ctx):
+        raise DomainError("Robokassa подключена — оплата подтверждается только её уведомлением")
+    pur = await ctx.s.get(Purchase, purchase_id)
+    if pur is None:
+        raise DomainError("Счёт не найден")
+    audit(ctx, actor.id, "purchase.test_payment", purchase_id=purchase_id, amount=pur.amount)
+    return await on_payment(ctx, purchase_id, pur.amount, op="test")
 
 
 def payment_link(ctx: Ctx, pur: Purchase) -> str:
     rk = ctx.app.payments
     name = ctx.config.receipt_item_name.format(n=pur.shares)
     if rk is None or not rk.configured:
-        return f"(Robokassa не настроена; счёт №{pur.id} на {rub(pur.amount)})"
+        return (f"Бот работает в пробном режиме, онлайн-оплата ещё не подключена. Ваш счёт №{pur.id} "
+                f"на {rub(pur.amount)}: основатель подтвердит оплату вручную.")
     return rk.payment_url(pur.id, pur.amount, name, rk.receipt(name, pur.shares, pur.amount))
 
 

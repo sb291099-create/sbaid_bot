@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import CreateChatInviteLink, EditMessageText, SendDocument, SendMessage
-from aiogram.types import CallbackQuery, Chat, ChatInviteLink, Message, Update, User as TgUser
+from aiogram.types import (CallbackQuery, Chat, ChatInviteLink, ChatMemberAdministrator, ChatMemberLeft,
+                           ChatMemberUpdated, Message, Update, User as TgUser)
 from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
 
@@ -54,10 +55,21 @@ class Harness:
     def __init__(self, app):
         self.app, self.session, self.n = app, FakeSession(), 0
         self.bot = Bot("123456:TEST", session=self.session)
-        app.config = app.config.__class__(**{**app.config.__dict__, "shareholders_group_id": -100200,
-                                             "public_channel_id": -100100})
         app.notifier = TelegramNotifier(self.bot, app.sm, app.config)
         self.dp = build_dispatcher(app)
+
+    async def add_bot_as_admin(self, by_tg_id, chat_id, chat_type, title):
+        self.n += 1
+        actor = TgUser(id=by_tg_id, is_bot=False, first_name="x")
+        me = TgUser(id=42, is_bot=True, first_name="bot")
+        # все обязательные права — False, набор полей зависит от версии Bot API
+        rights = {name: False for name, f in ChatMemberAdministrator.model_fields.items()
+                  if f.is_required() and name != "user"}
+        ev = ChatMemberUpdated(
+            chat=Chat(id=chat_id, type=chat_type, title=title), from_user=actor, date=NOW,
+            old_chat_member=ChatMemberLeft(user=me),
+            new_chat_member=ChatMemberAdministrator(user=me, **rights))
+        await self.dp.feed_update(self.bot, Update(update_id=self.n, my_chat_member=ev))
 
     async def say(self, tg_id, text, nick=None):
         self.n += 1
@@ -95,6 +107,13 @@ async def test_full_cycle_via_telegram(app):
     assert "участник клуба" in await h.register(FOUNDER)
     assert "участник клуба" in await h.register(SELLER)
     assert "участник клуба" in await h.register(BUYER)
+
+    # чужой человек не может подсунуть боту свой канал; основатель привязывает канал и группу
+    await h.add_bot_as_admin(SELLER, -100999, "channel", "Чужой канал")
+    await h.add_bot_as_admin(FOUNDER, -100100, "channel", "Сергей Борзунов · $SBAID")
+    await h.add_bot_as_admin(FOUNDER, -100200, "supergroup", "SBAID Holders")
+    assert "закрытая группа холдеров" in h.session.texts(FOUNDER)[-1]
+    assert await app.notifier.chat_id("channel") == -100100 and await app.notifier.chat_id("group") == -100200
 
     # гость не может покупать; участник не может админить
     assert "зарегистрируйтесь" in await h.say(99, "/buy")

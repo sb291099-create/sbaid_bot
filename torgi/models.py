@@ -258,6 +258,13 @@ class SettingChange(Base):
     changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
 
+class AppState(Base):
+    """Служебные значения, которые бот узнаёт сам (например, id канала и группы)."""
+    __tablename__ = "app_state"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

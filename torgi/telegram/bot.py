@@ -453,6 +453,7 @@ async def public_registry(m: Message, user: User, app: App):
 ADMIN_HELP = ("Админ-команды:\n"
               "/newplacement <объём> <дней> [цена ₽] — черновик размещения (без цены — расчётная)\n"
               "/closeplacement — закрыть текущее размещение\n"
+              "/testpay <№ счёта> — пробный режим: подтвердить оплату вручную, пока нет Robokassa\n"
               "/disputes — споры; /resolve <№> transfer|cancel <комментарий>\n"
               "/refunds — заявки на выход; /refund <№> <сумма ₽ | reject> [комментарий]; /refund_done <№>\n"
               "/link @ник, /unlink @ник — связанные аккаунты\n"
@@ -500,6 +501,15 @@ async def publish_placement(c: CallbackQuery, user: User, app: App):
         p = await placements.publish(ctx, await users.get(ctx, user.id), int(c.data.split(":")[2]))
     await c.message.edit_text(f"Размещение №{p.number} опубликовано в канале.")
     await c.answer()
+
+
+@router.message(Command("testpay"))
+async def testpay(m: Message, command: CommandObject, user: User, app: App):
+    inv = parse_int(args(command, 1, "/testpay <№ счёта>")[0])
+    async with app.tx() as ctx:
+        status = await placements.test_payment(ctx, await users.get(ctx, user.id), inv)
+    await m.answer({"credited": f"Счёт №{inv} отмечен оплаченным, SBAID начислены.",
+                    "duplicate": f"Счёт №{inv} уже был оплачен."}.get(status, f"Счёт №{inv}: {status}"))
 
 
 @router.message(Command("closeplacement"))
@@ -693,16 +703,23 @@ service = Router()
 
 @service.my_chat_member()
 async def bot_added(event: ChatMemberUpdated, app: App, bot: Bot):
-    """Когда бота добавляют в канал или группу, основатель получает id чата для настроек."""
-    if event.chat.type == "private" or not app.config.founder_telegram_id:
+    """Основатель добавляет бота админом в канал или группу — бот запоминает этот
+    чат как открытый канал или закрытую группу. Чужие добавления игнорируются."""
+    founder_id = app.config.founder_telegram_id
+    if event.chat.type == "private" or not founder_id:
         return
-    status = event.new_chat_member.status
-    var = "PUBLIC_CHANNEL_ID" if event.chat.type == "channel" else "SHAREHOLDERS_GROUP_ID"
+    if event.from_user.id != founder_id or event.new_chat_member.status != "administrator":
+        return
+    kind = "channel" if event.chat.type == "channel" else "group"
+    await app.notifier.bind_chat(kind, event.chat.id)
+    async with app.tx() as ctx:
+        from ..core.audit import audit
+        audit(ctx, None, "chat.bind", kind=kind, chat_id=event.chat.id, title=event.chat.title)
+    what = "открытый канал для итогов и объявлений" if kind == "channel" else "закрытая группа холдеров"
     try:
-        await bot.send_message(app.config.founder_telegram_id,
-                               f"Бот теперь «{status}» в «{event.chat.title}».\n{var}={event.chat.id}")
-    except Exception:  # noqa: BLE001
-        log.info("Чат %s (%s): id=%s, статус %s", event.chat.title, event.chat.type, event.chat.id, status)
+        await bot.send_message(founder_id, f"✅ «{event.chat.title}» подключён как {what}.")
+    except Exception:  # noqa: BLE001 — основатель ещё не нажал /start
+        log.info("Привязан %s «%s» (%s)", kind, event.chat.title, event.chat.id)
 
 
 def build_dispatcher(app: App) -> Dispatcher:

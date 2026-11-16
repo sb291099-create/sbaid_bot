@@ -389,3 +389,23 @@ async def test_placement_cap_per_half_year(app):
     app.clock_obj.now += timedelta(days=183)
     async with app.tx() as ctx:
         await placements.create(ctx, f, 25_000, None, days=30)
+
+
+async def test_trial_mode_manual_payment(app):
+    from torgi.payments.robokassa import Robokassa
+    await open_placement(app)
+    u = await member(app, 800, "trial")
+    f = await founder(app)
+    async with app.tx() as ctx:
+        pur, _ = await placements.reserve(ctx, await users.get(ctx, u.id), 10)
+        with pytest.raises(DomainError, match="Robokassa подключена"):
+            await placements.test_payment(ctx, f, pur.id)
+    app.payments = Robokassa("", "", "")  # Robokassa ещё не подключена
+    async with app.tx() as ctx:
+        with pytest.raises(DomainError, match="только основателю"):
+            await placements.test_payment(ctx, await users.get(ctx, u.id), pur.id)
+    async with app.tx() as ctx:
+        assert await placements.test_payment(ctx, f, pur.id) == "credited"
+    async with app.tx() as ctx:
+        assert await placements.test_payment(ctx, f, pur.id) == "duplicate"
+    assert await shares_of(app, u) == (10, 0)
