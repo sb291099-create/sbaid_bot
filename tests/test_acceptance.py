@@ -344,8 +344,10 @@ async def test_ban_after_three_points(app):
 async def test_order_price_band_and_expiry(app):
     p = await setup_market(app)
     async with app.tx() as ctx:
+        # референсная — цена последнего проданного SBAID на размещении: 20 090 продано → 140 ₽
+        assert await orders.reference_price(ctx) == 140 * R
         with pytest.raises(DomainError, match="пределах"):
-            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 201 * R)
+            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 281 * R)
         o = await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 150 * R)
     await run_day(app)  # не пересеклось → заявка истекла, акции разблокированы
     async with app.tx() as ctx:
@@ -409,3 +411,25 @@ async def test_trial_mode_manual_payment(app):
     async with app.tx() as ctx:
         assert await placements.test_payment(ctx, f, pur.id) == "duplicate"
     assert await shares_of(app, u) == (10, 0)
+
+
+async def test_ladder_price_in_placement(app):
+    await open_placement(app)  # 100 ₽, +2 ₽ за каждые 1000
+    a, b = await member(app, 900, "lad_a"), await member(app, 901, "lad_b")
+    p1 = await buy_on_placement(app, a, 995)
+    assert p1.amount == 995 * 100 * R
+    async with app.tx() as ctx:
+        pur, _ = await placements.reserve(ctx, await users.get(ctx, b.id), 10)
+        # 996-я…1000-я по 100 ₽, 1001-я…1005-я по 102 ₽
+        assert pur.amount == 5 * 100 * R + 5 * 102 * R
+        assert await placements.next_unit_price(ctx, await placements.current(ctx)) == 102 * R
+    async with app.tx() as ctx:
+        assert await placements.on_payment(ctx, pur.id, pur.amount) == "credited"
+    f = await founder(app)
+    async with app.tx() as ctx:
+        p = await placements.current(ctx)
+        await placements.close(ctx, f, p.id)
+        # следующее размещение без сделок стартует с цены последнего проданного SBAID
+        assert await placements.last_placement_price(ctx) == 102 * R
+        assert await orders.reference_price(ctx) == 102 * R
+    assert any("от 100 ₽ до 102 ₽" in t for k, _, t in app.notifier.sent if k == "channel")

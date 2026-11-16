@@ -172,8 +172,15 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
             return await m.answer("Сейчас нет открытого размещения. Объявление появится в канале.")
         left = await placements.available(ctx, p)
         mine = await placements.user_bought(ctx, p.id, user.id)
+        now_price = await placements.next_unit_price(ctx, p)
+    ladder = ""
+    if p.ladder_every and p.ladder_step and left:
+        taken = p.volume - left
+        to_next = p.ladder_every - taken % p.ladder_every
+        ladder = (f"\nЦена растёт на {rub(p.ladder_step)} после каждых {p.ladder_every} проданных SBAID: "
+                  f"ещё {min(to_next, left)} SBAID по {rub(now_price)}, дальше {rub(now_price + p.ladder_step)}.")
     await state.set_state(Buy.placement_qty)
-    await m.answer(f"Размещение №{p.number}\nЦена: {rub(p.price)} за 1 SBAID\nОсталось: {left} из {p.volume}\n"
+    await m.answer(f"Размещение №{p.number}\nЦена сейчас: {rub(now_price)} за 1 SBAID{ladder}\nОсталось: {left} из {p.volume}\n"
                    f"Лот: {p.lot} SBAID\nЛимит в одни руки: {p.per_user_limit} (у вас уже {mine})\n"
                    f"До {fmt_msk(p.ends_at)}\n\nСколько SBAID хотите купить? Напишите число, кратное {p.lot}.")
 
@@ -416,14 +423,17 @@ async def exit_start(m: Message, user: User, app: App, state: FSMContext):
         u = await users.get(ctx, user.id)
         users.require_member(u)
         o = await exits.options(ctx, u)
+    market = ("Выйти из клуба по рыночной цене можно в любой момент: подайте заявку на продажу (/sell), "
+              "и на ближайшем торговом дне ваши SBAID купят другие участники. Деньги вам переведёт покупатель.")
     if o["redeemable"] == 0:
-        return await m.answer("У вас нет свободных SBAID, купленных на размещении. SBAID, купленные на рынке "
-                              "или полученные в подарок, можно только продать (/sell) или подарить (/gift).")
+        return await m.answer(market)
     await state.set_state(ExitFlow.qty)
-    await m.answer(f"Погасить можно до {o['redeemable']} SBAID, купленных на размещении.\n"
-                   f"Из них {o['auto_refund']} куплены не больше {o['refund_days']} дней назад — за них деньги "
-                   f"вернутся автоматически и полностью. За остальные возврат решает основатель.\n\n"
-                   f"Сколько SBAID погасить? Погашенные SBAID возвращаются в казну и перестают голосовать.")
+    await m.answer(f"{market}\n\nЕсли вы хотите вернуть SBAID основателю и получить деньги за покупку на "
+                   f"размещении, погасить можно до {o['redeemable']} SBAID. Из них {o['auto_refund']} куплены "
+                   f"не больше {o['refund_days']} дней назад — за них деньги вернутся автоматически и полностью. "
+                   f"По остальным заявка уйдёт основателю: по закону он возвращает уплаченное за вычетом "
+                   f"фактических расходов.\n\nСколько SBAID погасить? Погашенные SBAID возвращаются в казну и "
+                   f"перестают голосовать. Чтобы отказаться, отправьте /start.")
 
 
 @router.message(ExitFlow.qty, F.text, ~F.text.startswith("/"))
@@ -490,8 +500,9 @@ async def new_placement(m: Message, command: CommandObject, user: User, app: App
     async with app.tx() as ctx:
         p = await placements.create(ctx, await users.get(ctx, user.id), volume, price, days)
     steps = "\n".join(f"• {s}" for s in p.price_calc["steps"])
-    await m.answer(f"Черновик размещения №{p.number}: {p.volume} SBAID по {rub(p.price)}, лот {p.lot}, "
-                   f"лимит в одни руки {p.per_user_limit}, до {fmt_msk(p.ends_at)}.\n\nРасчёт цены:\n{steps}",
+    await m.answer(f"Черновик размещения №{p.number}: {p.volume} SBAID, лот {p.lot}, "
+                   f"лимит в одни руки {p.per_user_limit}, до {fmt_msk(p.ends_at)}.\n{placements.ladder_text(p)}\n\n"
+                   f"Стартовая цена:\n{steps}",
                    reply_markup=markup([[Button("Опубликовать", f"pl:publish:{p.id}")]]))
 
 

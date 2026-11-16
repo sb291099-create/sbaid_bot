@@ -73,7 +73,10 @@ class Placement(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     number: Mapped[int] = mapped_column(Integer, unique=True)
     volume: Mapped[int] = mapped_column(Integer)
-    price: Mapped[int] = mapped_column(BigInteger)  # копейки за акцию
+    price: Mapped[int] = mapped_column(BigInteger)  # стартовая цена, копейки за SBAID
+    # лесенка: цена растёт на ladder_step после каждых ladder_every проданных (0 — одна цена)
+    ladder_every: Mapped[int] = mapped_column(Integer, default=0)
+    ladder_step: Mapped[int] = mapped_column(BigInteger, default=0)
     starts_at: Mapped[datetime] = _ts(False)
     ends_at: Mapped[datetime] = _ts(False)
     lot: Mapped[int] = mapped_column(Integer)
