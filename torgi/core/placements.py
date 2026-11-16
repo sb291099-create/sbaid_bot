@@ -50,6 +50,13 @@ async def create(ctx: Ctx, actor: User, volume: int, price: int | None, days: in
         Placement.status.in_(("draft", "open"))))).scalar_one()
     if volume > tre.total - int(busy):
         raise DomainError(f"В казне свободно только {tre.total - int(busy)} акций")
+    cap, period = await settings.get_many(ctx, "placement_period_cap", "placement_period_days")
+    recent = int((await ctx.s.execute(select(func.coalesce(func.sum(Placement.volume), 0)).where(
+        Placement.status.in_(("draft", "open", "closed")),
+        Placement.starts_at > (starts_at or ctx.now) - timedelta(days=period)))).scalar_one())
+    if recent + volume > cap:
+        raise DomainError(f"За {period} дней можно разместить не больше {cap} акций; "
+                          f"уже размещено {recent}, доступно {max(0, cap - recent)}")
     lot, limit_pct = await settings.get_many(ctx, "placement_lot", "placement_user_limit_pct")
     per_user = max(lot, (volume * limit_pct // 100) // lot * lot)
     number = int((await ctx.s.execute(select(func.coalesce(func.max(Placement.number), 0)))).scalar_one()) + 1
@@ -158,7 +165,7 @@ async def reserve(ctx: Ctx, user: User, shares: int) -> tuple[Purchase, str]:
     left = await available(ctx, p)
     if shares > left:
         raise DomainError(f"Осталось только {left} акций")
-    await registry.check_ownership_limit(ctx, user.id, shares, include_offered=True)
+    await registry.check_ownership_limit(ctx, user.id, shares)
     minutes = await settings.get(ctx, "reserve_minutes")
     amount = shares * p.price
     pur = Purchase(placement_id=p.id, user_id=user.id, shares=shares, amount=amount, status="reserved",

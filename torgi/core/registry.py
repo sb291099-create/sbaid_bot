@@ -138,19 +138,21 @@ async def incoming_exposure(ctx: Ctx, user_id: int) -> int:
     return total
 
 
-async def check_ownership_limit(ctx: Ctx, user_id: int, extra: int, *, include_offered: bool = False) -> None:
-    """Доля после получения extra акций (с учётом всех ожидающих поступлений)
-    не должна превысить лимит владения.
+async def ownership_base(ctx: Ctx) -> int:
+    """База лимита владения: размещённые акции (вне казны) плюс ещё не проданный
+    объём открытого размещения. Без второго слагаемого первые покупатели нового
+    клуба сразу упирались бы в лимит: при 100 проданных акциях 15% — это 15 штук."""
+    return await outstanding(ctx) + await _offered_unsold(ctx)
 
-    Знаменатель — размещённые акции (вне казны). Для покупки на размещении
-    добавляется ещё не проданный объём открытого размещения, иначе первые
-    покупатели нового клуба упирались бы в лимит."""
+
+async def check_ownership_limit(ctx: Ctx, user_id: int, extra: int) -> None:
+    """Доля после получения extra акций (с учётом всех ожидающих поступлений:
+    заявок на покупку, открытых сделок, резервов, подарков) не должна превысить
+    лимит владения."""
     limit_pct = await settings.get(ctx, "ownership_limit_pct")
     h = await holding(ctx, user_id)
     after = h.total + await incoming_exposure(ctx, user_id) + extra
-    denom = await outstanding(ctx)
-    if include_offered:
-        denom += await _offered_unsold(ctx)
+    denom = await ownership_base(ctx)
     if denom <= 0 or after * 100 > limit_pct * denom:
         max_allowed = max(0, (limit_pct * denom) // 100 - (after - extra))
         raise DomainError(

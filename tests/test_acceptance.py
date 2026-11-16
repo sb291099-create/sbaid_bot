@@ -212,10 +212,10 @@ async def test_no_simultaneous_buy_and_sell(app):
 
 
 async def test_ownership_limit_on_buy_and_gift(app):
-    p = await setup_market(app)  # размещено 20 090 акций → лимит 15% ≈ 3013
+    p = await setup_market(app)  # база лимита — партия 25 000 → 15% = 3750
     async with app.tx() as ctx:
         with pytest.raises(DomainError, match="лимит владения"):
-            await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 3100, 100 * R)
+            await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 3751, 100 * R)
     async with app.tx() as ctx:
         await orders.create(ctx, await users.get(ctx, p["Д"].id), "buy", 3000, 100 * R)
     # bg0 (2000 акций) дарит Д 1000 → с учётом заявки на 3000 лимит превышен
@@ -374,3 +374,18 @@ async def test_voting_share_excludes_treasury(app):
         assert abs(await registry.voting_share(ctx, p["А"].id) - 20 / 20_090) < 1e-12
         total = (await ctx.s.execute(select(Holding.total))).scalars().all()
         assert sum(total) == 1_000_000
+
+
+async def test_placement_cap_per_half_year(app):
+    f = await founder(app)
+    async with app.tx() as ctx:
+        with pytest.raises(DomainError, match="не больше 25000"):
+            await placements.create(ctx, f, 25_005, 100 * R, days=30)
+    p = await open_placement(app)
+    async with app.tx() as ctx:
+        await placements.close(ctx, f, p.id)
+        with pytest.raises(DomainError, match="не больше 25000"):
+            await placements.create(ctx, f, 5, 100 * R, days=30)
+    app.clock_obj.now += timedelta(days=183)
+    async with app.tx() as ctx:
+        await placements.create(ctx, f, 25_000, None, days=30)

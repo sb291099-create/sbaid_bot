@@ -16,6 +16,8 @@ from .errors import DomainError
 # ключ: (значение по умолчанию, описание для админа и канала)
 DEFAULTS: dict[str, tuple[Any, str]] = {
     "placement_lot": (5, "Лот на размещении, акций"),
+    "placement_period_cap": (25_000, "Максимум акций на размещениях за период"),
+    "placement_period_days": (182, "Период для лимита размещений, дней"),
     "placement_user_limit_pct": (10, "Лимит в одни руки на размещении, % объёма партии"),
     "ownership_limit_pct": (15, "Лимит владения, % всех размещённых акций"),
     "reserve_minutes": (30, "Резерв акций на время оплаты, минут"),
