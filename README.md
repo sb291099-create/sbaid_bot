@@ -55,9 +55,9 @@ torgi/
 России) с Ubuntu 22.04 или 24.04. Домен покупать не обязательно.
 
 ```
-git clone https://github.com/ВАШ_ЛОГИН/sbaid-bot.git
-cd sbaid-bot
-bash install.sh
+apt-get update && apt-get install -y git
+git clone https://github.com/sb291099-create/sbaid_bot.git
+cd sbaid_bot && bash install.sh
 ```
 
 Скрипт поставит Docker, спросит токен бота и ваш Telegram id, сам создаст пароль
