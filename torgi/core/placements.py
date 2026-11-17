@@ -37,6 +37,11 @@ def ladder_text(p: Placement) -> str:
             f"{p.ladder_every} дороже на {rub(p.ladder_step)}, последние — по {rub(top)}.")
 
 
+def limit_text(p: Placement) -> str:
+    """«, лимит в одни руки: N» — только если лимит включён."""
+    return f", лимит в одни руки: {p.per_user_limit}" if p.per_user_limit < p.volume else ""
+
+
 async def last_placement_price(ctx: Ctx) -> int | None:
     p = (await ctx.s.execute(select(Placement).where(Placement.status.in_(("open", "closed")))
                              .order_by(Placement.number.desc()).limit(1))).scalar_one_or_none()
@@ -94,7 +99,7 @@ async def create(ctx: Ctx, actor: User, volume: int, price: int | None, days: in
                           f"уже размещено {recent}, доступно {max(0, cap - recent)}")
     lot, limit_pct, every, lstep = await settings.get_many(
         ctx, "placement_lot", "placement_user_limit_pct", "ladder_every", "ladder_step_kop")
-    per_user = max(lot, (volume * limit_pct // 100) // lot * lot)
+    per_user = max(lot, (volume * limit_pct // 100) // lot * lot) if limit_pct else volume
     number = int((await ctx.s.execute(select(func.coalesce(func.max(Placement.number), 0)))).scalar_one()) + 1
     starts_at = starts_at or ctx.now
     if mode == "auction":
@@ -125,7 +130,7 @@ async def publish(ctx: Ctx, actor: User, placement_id: int) -> Placement:
     note = "" if calc.get("used") == calc.get("suggested") else \
         f"\nОснователь установил цену {rub(p.price)} (расчётная — {rub(calc.get('suggested', 0))})."
     ctx.publish(f"📢 Размещение №{p.number}\nОбъём: {p.volume} SBAID\n{ladder_text(p)}\n"
-                f"Лот: {p.lot}, лимит в одни руки: {p.per_user_limit}\nДо {fmt_msk(p.ends_at)}\n\n"
+                f"Лот: {p.lot}{limit_text(p)}\nДо {fmt_msk(p.ends_at)}\n\n"
                 f"Стартовая цена:\n{steps}{note}\n\nКупить: /placement в боте")
     return p
 

@@ -271,9 +271,10 @@ async def test_placement_lot_and_limits(app):
     async with app.tx() as ctx:
         with pytest.raises(DomainError, match="кратно"):
             await placements.reserve(ctx, await users.get(ctx, u.id), 7)
-    async with app.tx() as ctx:
-        with pytest.raises(DomainError, match="одни руки"):
-            await placements.reserve(ctx, await users.get(ctx, u.id), 2505)
+    async with app.tx() as ctx:  # лимита в одни руки по умолчанию нет
+        pur, _ = await placements.reserve(ctx, await users.get(ctx, u.id), 3000)
+        assert pur.shares == 3000
+        assert placements.limit_text(await placements.current(ctx)) == ""
 
 
 async def test_reservation_expires(app):
@@ -571,8 +572,6 @@ async def test_auction_rules(app):
     async with app.tx() as ctx:
         with pytest.raises(DomainError, match="не меньше 80"):
             await placements.place_bid(ctx, await users.get(ctx, u.id), 10, 79 * R)
-        with pytest.raises(DomainError, match="одни руки"):
-            await placements.place_bid(ctx, await users.get(ctx, u.id), 2505, 100 * R)
         with pytest.raises(DomainError, match="основателю|Основатель"):
             await placements.place_bid(ctx, await founder(app), 10, 100 * R)
     await bid(app, u, 10, 100)

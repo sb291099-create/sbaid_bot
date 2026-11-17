@@ -182,7 +182,7 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
             kb = markup([[Button("Отменить мою заявку", "pl:cancelbid")]]) if bid else None
             return await m.answer(
                 f"Аукцион размещения №{p.number}: {p.volume} SBAID\n{placements.ladder_text(p)}\n"
-                f"Лот: {p.lot}, лимит в одни руки: {p.per_user_limit}\nПриём заявок до {fmt_msk(p.ends_at)}. "
+                f"Лот: {p.lot}{placements.limit_text(p)}\nПриём заявок до {fmt_msk(p.ends_at)}. "
                 f"Деньги списываются только после итогов, если заявка выиграла.{mine}\n\n"
                 f"Сколько SBAID хотите купить? Число, кратное {p.lot}.", reply_markup=kb)
         left = await placements.available(ctx, p)
@@ -195,8 +195,9 @@ async def placement(m: Message, user: User, app: App, state: FSMContext):
         ladder = (f"\nЦена растёт на {rub(p.ladder_step)} после каждых {p.ladder_every} проданных SBAID: "
                   f"ещё {min(to_next, left)} SBAID по {rub(now_price)}, дальше {rub(now_price + p.ladder_step)}.")
     await state.set_state(Buy.placement_qty)
+    limit = placements.limit_text(p) + (f" (у вас уже {mine})" if placements.limit_text(p) else "")
     await m.answer(f"Размещение №{p.number}\nЦена сейчас: {rub(now_price)} за 1 SBAID{ladder}\nОсталось: {left} из {p.volume}\n"
-                   f"Лот: {p.lot} SBAID\nЛимит в одни руки: {p.per_user_limit} (у вас уже {mine})\n"
+                   f"Лот: {p.lot} SBAID{limit}\n"
                    f"До {fmt_msk(p.ends_at)}\n\nСколько SBAID хотите купить? Напишите число, кратное {p.lot}.")
 
 
@@ -570,7 +571,7 @@ async def new_placement(m: Message, command: CommandObject, user: User, app: App
                                     mode="auction" if auction else "fixed")
     steps = "\n".join(f"• {s}" for s in p.price_calc["steps"])
     await m.answer(f"Черновик размещения №{p.number}: {p.volume} SBAID, лот {p.lot}, "
-                   f"лимит в одни руки {p.per_user_limit}, до {fmt_msk(p.ends_at)}.\n{placements.ladder_text(p)}\n\n"
+                   f"{placements.limit_text(p).lstrip(', ')}{', ' if placements.limit_text(p) else ''}до {fmt_msk(p.ends_at)}.\n{placements.ladder_text(p)}\n\n"
                    f"Стартовая цена:\n{steps}",
                    reply_markup=markup([[Button("Опубликовать", f"pl:publish:{p.id}")]]))
 

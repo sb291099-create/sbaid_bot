@@ -18,7 +18,7 @@ DEFAULTS: dict[str, tuple[Any, str]] = {
     "placement_lot": (5, "Лот на размещении, SBAID"),
     "placement_period_cap": (25_000, "Максимум SBAID на размещениях за период"),
     "placement_period_days": (182, "Период для лимита размещений, дней"),
-    "placement_user_limit_pct": (10, "Лимит в одни руки на размещении, % объёма партии"),
+    "placement_user_limit_pct": (0, "Лимит в одни руки на размещении, % объёма партии (0 — без лимита)"),
     "ownership_limit_pct": (0, "Лимит владения, % всех размещённых SBAID (0 — без лимита)"),
     "reserve_minutes": (30, "Резерв SBAID на время оплаты, минут"),
     "trade_pay_hours": (24, "Часов покупателю на перевод денег после сделки"),
