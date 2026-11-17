@@ -1,4 +1,4 @@
-"""Сделка на бирже: оплата, подтверждение, спор, сроки и штрафы.
+"""Сделка на бирже: оплата, подтверждение, спор и сроки.
 
 Бот никогда не переносит акции, пока продавец не подтвердил получение денег
 или админ не решил спор в пользу переноса.
@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from sqlalchemy import or_, select
 
-from ..models import Dispute, Penalty, Trade, TradeStatus as TS, User
+from ..models import Dispute, Trade, TradeStatus as TS, User
 from ..timeutil import fmt_msk, rub
 from . import registry, settings, users
 from .audit import audit
@@ -149,8 +149,7 @@ async def add_evidence(ctx: Ctx, user: User, trade_id: int, file_id: str, kind: 
     audit(ctx, user.id, "trade.evidence", trade_id=t.id, dispute_id=d.id if d else None, kind=kind)
 
 
-async def resolve_dispute(ctx: Ctx, admin: User, dispute_id: int, decision: str, comment: str,
-                          penalize: bool = True) -> Dispute:
+async def resolve_dispute(ctx: Ctx, admin: User, dispute_id: int, decision: str, comment: str) -> Dispute:
     users.require_founder(admin)
     if decision not in ("transfer", "cancel"):
         raise DomainError("Решение — «перенести» или «отменить»")
@@ -162,34 +161,25 @@ async def resolve_dispute(ctx: Ctx, admin: User, dispute_id: int, decision: str,
     t = await get_locked(ctx, d.trade_id)
     d.decision, d.comment, d.decided_by, d.decided_at = decision, comment.strip(), admin.id, ctx.now
     audit(ctx, admin.id, "dispute.resolve", dispute_id=d.id, trade_id=t.id, decision=decision,
-          comment=comment, penalize=penalize)
+          comment=comment)
     if decision == "transfer":
         await _complete(ctx, t, admin.id, basis_note=f"решение админа по спору №{d.id}")
-        loser = t.seller_id
     else:
         await _cancel(ctx, t, admin.id, f"решение админа по спору №{d.id}: {comment.strip()}")
-        loser = t.buyer_id
     for uid in (t.buyer_id, t.seller_id):
         ctx.send(uid, f"⚖️ Спор №{d.id} решён: {'SBAID переносятся' if decision == 'transfer' else 'сделка отменена'}."
                       f"\nКомментарий админа: {comment.strip()}")
-    if penalize:
-        await users.add_penalty(ctx, loser, 2, f"проигран спор №{d.id}", trade_id=t.id, actor_id=admin.id)
     return d
 
 
 async def process_deadlines(ctx: Ctx) -> None:
-    """Истёк срок оплаты — сделка отменяется, покупателю 1 балл.
+    """Истёк срок оплаты — сделка отменяется, SBAID продавца разблокируются.
     Истёк срок подтверждения — автоматически открывается спор (акции без
     подтверждения продавца не переносятся)."""
     overdue_pay = (await ctx.s.execute(select(Trade).where(
         Trade.status == TS.AWAITING_PAYMENT, Trade.pay_deadline <= ctx.now).with_for_update())).scalars().all()
     for t in overdue_pay:
         await _cancel(ctx, t, None, "покупатель не оплатил вовремя")
-        # одна заявка может исполниться несколькими сделками — балл один за заявку
-        already = (await ctx.s.execute(select(Penalty.id).join(Trade, Trade.id == Penalty.trade_id).where(
-            Penalty.user_id == t.buyer_id, Penalty.points == 1, Trade.buy_order_id == t.buy_order_id))).first()
-        if not already:
-            await users.add_penalty(ctx, t.buyer_id, 1, f"не оплачена сделка №{t.id}", trade_id=t.id)
     overdue_conf = (await ctx.s.execute(select(Trade).where(
         Trade.status == TS.AWAITING_CONFIRMATION, Trade.confirm_deadline <= ctx.now).with_for_update())).scalars().all()
     for t in overdue_conf:

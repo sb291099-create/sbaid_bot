@@ -43,9 +43,10 @@ class User(Base):
     offer_accepted_at: Mapped[datetime | None] = _ts()
     offer_version: Mapped[str | None] = mapped_column(String(32))
     pd_consent_at: Mapped[datetime | None] = _ts()
+    # подтверждение совершеннолетия (18+), даётся вместе с принятием оферты
+    adult_confirmed_at: Mapped[datetime | None] = _ts()
     role: Mapped[str] = mapped_column(String(16), default=Role.GUEST)
     linked_to_founder: Mapped[bool] = mapped_column(Boolean, default=False)
-    banned_until: Mapped[datetime | None] = _ts()
     completed_trades: Mapped[int] = mapped_column(Integer, default=0)
     # Реквизиты для приёма оплаты (СБП-телефон и банк), зашифрованы.
     payout_details_enc: Mapped[str | None] = mapped_column(Text)
@@ -233,16 +234,6 @@ class Dispute(Base):
     decided_at: Mapped[datetime | None] = _ts()
     deadline: Mapped[datetime] = _ts(False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class Penalty(Base):
-    __tablename__ = "penalties"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    points: Mapped[int] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(Text)
-    trade_id: Mapped[int | None] = mapped_column(ForeignKey("trades.id"))
-    created_at: Mapped[datetime] = _ts(False)
 
 
 class PriceHistory(Base):

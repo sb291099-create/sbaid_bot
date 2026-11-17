@@ -62,12 +62,6 @@ async def adjust(ctx: Ctx, admin: User, nick: str, delta: int, reason: str) -> T
     return tr
 
 
-async def manual_penalty(ctx: Ctx, admin: User, nick: str, points: int, reason: str) -> None:
-    users.require_founder(admin)
-    u = await users.by_username(ctx, nick)
-    await users.add_penalty(ctx, u.id, points, reason, actor_id=admin.id)
-
-
 async def broadcast(ctx: Ctx, admin: User, text: str) -> int:
     users.require_founder(admin)
     ms = await users.members(ctx)

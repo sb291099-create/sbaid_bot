@@ -173,11 +173,12 @@ async def test_no_transfer_without_seller_confirmation(app):
         t = await ctx.s.get(Trade, t.id)
         assert t.status == TS.DISPUTED
     assert (await shares_of(app, p["Д"]))[0] == 0
-    # покупатель Е не оплатил вовремя обе сделки по одной заявке — отменены, ему 1 штрафной балл
+    # покупатель Е не оплатил вовремя обе сделки по одной заявке — обе отменены, штрафов нет
     async with app.tx() as ctx:
         other = (await ctx.s.execute(select(Trade).where(Trade.status == TS.CANCELLED))).scalars().all()
         assert {x.buyer_id for x in other} >= {p["Е"].id}
-        assert await users.penalty_points(ctx, p["Е"].id) == 1
+        assert all(x.status == TS.CANCELLED for x in other if x.buyer_id == p["Е"].id)
+    assert await shares_of(app, p["Б"]) == (30, 0)  # отменённые сделки (Е и Ж) разблокированы
     # админ решает спор в пользу переноса
     f = await founder(app)
     async with app.tx() as ctx:
@@ -363,16 +364,6 @@ async def test_journal_is_append_only_and_admin_actions_audited(app):
             await ctx.s.execute(text("DELETE FROM transfers"))
     assert await shares_of(app, p["А"]) == (15, 0)
     await invariant(app)
-
-
-async def test_ban_after_three_points(app):
-    p = await setup_market(app)
-    f = await founder(app)
-    async with app.tx() as ctx:
-        await admin.manual_penalty(ctx, f, "u0", 3, "тест")
-    async with app.tx() as ctx:
-        with pytest.raises(DomainError, match="запрещена"):
-            await orders.create(ctx, await users.get(ctx, p["А"].id), "sell", 5, 100 * R)
 
 
 async def test_order_price_band_and_expiry(app):

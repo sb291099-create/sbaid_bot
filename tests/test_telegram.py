@@ -103,7 +103,8 @@ class Harness:
 async def test_full_cycle_via_telegram(app):
     h = Harness(app)
     FOUNDER, SELLER, BUYER = 1, 10, 20
-    assert "Принимаю" in h.session.last_markup(FOUNDER).inline_keyboard[0][0].text if await h.say(FOUNDER, "/start") else True
+    assert "Мне есть 18 лет" in h.session.last_markup(FOUNDER).inline_keyboard[0][0].text if await h.say(FOUNDER, "/start") else True
+    assert "только совершеннолетние (18+)" in h.session.texts(FOUNDER)[-1]
     assert "участник клуба" in await h.register(FOUNDER)
     assert "участник клуба" in await h.register(SELLER)
     assert "участник клуба" in await h.register(BUYER)

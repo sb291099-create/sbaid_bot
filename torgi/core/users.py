@@ -1,4 +1,4 @@
-"""Участники: регистрация, роли, реквизиты, штрафные баллы."""
+"""Участники: регистрация, роли, реквизиты."""
 from __future__ import annotations
 
 import re
@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from sqlalchemy import func, select
 
-from ..models import Order, Penalty, Role, User
+from ..models import Order, Role, User
 from . import registry, settings
 from .audit import audit
 from .context import Ctx
@@ -51,7 +51,9 @@ async def accept_offer(ctx: Ctx, user_id: int) -> None:
     u = await get(ctx, user_id)
     u.offer_accepted_at = ctx.now
     u.offer_version = ctx.config.offer_version
-    audit(ctx, u.id, "user.offer_accepted", version=u.offer_version)
+    # кнопка принятия оферты одновременно подтверждает, что участнику есть 18 лет
+    u.adult_confirmed_at = ctx.now
+    audit(ctx, u.id, "user.offer_accepted", version=u.offer_version, adult_confirmed=True)
 
 
 async def consent_pd(ctx: Ctx, user_id: int) -> None:
@@ -112,31 +114,6 @@ async def set_payout_details(ctx: Ctx, user_id: int, phone: str, bank: str) -> N
     u = await get(ctx, user_id)
     u.payout_details_enc = ctx.cipher.encrypt(f"СБП: {phone.strip()}, банк: {bank.strip()}")
     audit(ctx, u.id, "user.payout_details_set")
-
-
-async def penalty_points(ctx: Ctx, user_id: int) -> int:
-    window = await settings.get(ctx, "penalty_window_days")
-    v = (await ctx.s.execute(select(func.coalesce(func.sum(Penalty.points), 0)).where(
-        Penalty.user_id == user_id, Penalty.created_at > ctx.now - timedelta(days=window)))).scalar_one()
-    return int(v)
-
-
-async def add_penalty(ctx: Ctx, user_id: int, points: int, reason: str, trade_id: int | None = None,
-                      actor_id: int | None = None) -> None:
-    ctx.s.add(Penalty(user_id=user_id, points=points, reason=reason, trade_id=trade_id, created_at=ctx.now))
-    await ctx.s.flush()
-    audit(ctx, actor_id, "penalty.add", user_id=user_id, points=points, reason=reason, trade_id=trade_id)
-    total = await penalty_points(ctx, user_id)
-    limit, ban_days = await settings.get_many(ctx, "penalty_ban_points", "ban_days")
-    msg = f"⚠️ Вам начислено штрафных баллов: {points} ({reason}). За последние полгода: {total}."
-    if total >= limit:
-        u = await get(ctx, user_id)
-        u.banned_until = ctx.now + timedelta(days=ban_days)
-        await cancel_all_orders(ctx, user_id, reason="запрет на торговлю")
-        audit(ctx, None, "user.banned", user_id=user_id, until=u.banned_until)
-        from ..timeutil import fmt_msk
-        msg += f"\nТорговля запрещена до {fmt_msk(u.banned_until)}, активные заявки отменены."
-    ctx.send(user_id, msg)
 
 
 async def cancel_all_orders(ctx: Ctx, user_id: int, reason: str) -> None:

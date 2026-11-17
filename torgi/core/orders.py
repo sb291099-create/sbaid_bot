@@ -50,8 +50,6 @@ async def create(ctx: Ctx, user: User, side: str, shares: int, limit_price: int,
     users.require_member(user)
     if users.founder_side(user):
         raise DomainError("Основатель и связанные с ним аккаунты не торгуют на рынке между участниками")
-    if user.banned_until and user.banned_until > ctx.now:
-        raise DomainError("Торговля для вас временно запрещена из-за штрафных баллов")
     if side not in ("buy", "sell"):
         raise DomainError("Неизвестный тип заявки")
     if shares <= 0:

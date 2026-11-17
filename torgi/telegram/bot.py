@@ -117,10 +117,11 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
         f"SBAID продаются на размещениях, а на бирже бота участники в любой момент покупают и продают их "
         f"друг другу, цена меняется после каждой сделки. Новости и итоги торгов выходят в канале {channel}. После первой покупки бот "
         f"пришлёт личную ссылку в закрытую группу «{c.group_name}».\n\n"
+        "Участвовать могут только совершеннолетние (18+).\n\n"
         "SBAID — единица участия и голоса в клубе. Это не ценная бумага, не доля в имуществе "
         "и не инвестиция, дохода она не гарантирует.\n\n"
         + legal_links(app),
-        reply_markup=markup([[Button("Принимаю оферту и правила", "reg:offer")]]))
+        reply_markup=markup([[Button("Мне есть 18 лет, принимаю оферту и правила", "reg:offer")]]))
 
 
 @router.message(Command("rules"))
@@ -469,13 +470,10 @@ async def portfolio(m: Message, user: User, app: App):
         u = await users.get(ctx, user.id)
         h = await registry.holding(ctx, u.id)
         share = await registry.voting_share(ctx, u.id)
-        points = await users.penalty_points(ctx, u.id)
         ords = await orders.active_orders(ctx, u.id)
         trs = await trades.user_trades(ctx, u.id, limit=10)
     lines = [f"SBAID: {h.total} (заблокировано {h.blocked})", f"Доля голосов: {share * 100:.4f}%",
-             f"Завершённых сделок: {u.completed_trades}", f"Штрафных баллов за полгода: {points}"]
-    if u.banned_until and u.banned_until > app.clock():
-        lines.append(f"Торговля запрещена до {fmt_msk(u.banned_until)}")
+             f"Завершённых сделок: {u.completed_trades}"]
     if ords:
         lines.append("\nАктивные заявки:")
         lines += [f"• №{o.id} {SIDE[o.side]} {o.remaining} по {rub(o.limit_price)}" for o in ords]
@@ -542,7 +540,6 @@ ADMIN_HELP = ("Админ-команды:\n"
               "/export registry|journal|public\n"
               "/broadcast <текст>\n"
               "/adjust @ник <±SBAID> <причина>\n"
-              "/penalty @ник <баллы> <причина>\n"
               "/journal — последние записи аудита")
 
 
@@ -742,14 +739,6 @@ async def adjust(m: Message, command: CommandObject, user: User, app: App):
     async with app.tx() as ctx:
         await admin.adjust(ctx, await users.get(ctx, user.id), nick, parse_int(delta), reason)
     await m.answer("Корректировка записана в журнал, владелец уведомлён.")
-
-
-@router.message(Command("penalty"))
-async def penalty(m: Message, command: CommandObject, user: User, app: App):
-    nick, points, reason = args(command, 3, "/penalty @ник <баллы> <причина>")
-    async with app.tx() as ctx:
-        await admin.manual_penalty(ctx, await users.get(ctx, user.id), nick, parse_int(points), reason)
-    await m.answer("Штрафные баллы начислены.")
 
 
 @router.message(Command("journal"))
