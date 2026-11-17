@@ -100,9 +100,24 @@ class Harness:
         return r.status, await r.text()
 
 
-async def test_full_cycle_via_telegram(app):
+async def test_full_cycle_via_telegram(app, tmp_path):
+    import dataclasses
+    (tmp_path / "oferta.pdf").write_bytes(b"%PDF-1.4 test")
+    (tmp_path / "politika-pd.pdf").write_bytes(b"%PDF-1.4 test")
+    app.config = dataclasses.replace(app.config, docs_dir=str(tmp_path), rules_url="https://telegra.ph/pravila")
     h = Harness(app)
     FOUNDER, SELLER, BUYER = 1, 10, 20
+    # документы любой получает до кнопки согласия: PDF из папки docs и ссылки
+    await h.say(77, "/start")
+    docs = [c for c in h.session.calls if isinstance(c, SendDocument) and c.chat_id == 77]
+    assert [d.caption for d in docs] == ["Оферта (версия 1.0)", "Политика обработки персональных данных"]
+    welcome = h.session.texts(77)[-1]
+    assert h.session.calls.index(docs[-1]) < len(h.session.calls) - 1  # файлы раньше приветствия
+    assert "Правила торгов: https://telegra.ph/pravila" in welcome and "Устав клуба: пока не опубликовано" in welcome
+    assert "Оферта (версия 1.0): файл выше" in welcome
+    n = len(h.session.calls)
+    assert "Документы клуба" in await h.say(77, "/rules")
+    assert sum(isinstance(c, SendDocument) for c in h.session.calls[n:]) == 2
     assert "Мне есть 18 лет" in h.session.last_markup(FOUNDER).inline_keyboard[0][0].text if await h.say(FOUNDER, "/start") else True
     assert "только совершеннолетние (18+)" in h.session.texts(FOUNDER)[-1]
     assert "участник клуба" in await h.register(FOUNDER)

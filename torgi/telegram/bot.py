@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, ExceptionTypeFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, ChatMemberUpdated, ErrorEvent, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, ChatMemberUpdated, ErrorEvent, Message
 
 from ..core import admin, exits, gifts, market, orders, placements, registry, settings, trades, users
 from ..core.context import App, Button
@@ -97,11 +98,33 @@ HELP = ("Команды:\n/placement — купить SBAID на размеще�
 
 
 # --- регистрация ---------------------------------------------------------------------
-def legal_links(app: App) -> str:
+def legal_docs(app: App) -> list[tuple[str, str, Path | None]]:
+    """(название, ссылка, PDF-файл) для оферты, устава, правил и политики ПДн."""
     c = app.config
-    return (f"• Оферта (версия {c.offer_version}): {c.offer_url or 'ссылка не настроена'}\n"
-            f"• Правила торгов: {c.rules_url or 'ссылка не настроена'}\n"
-            f"• Политика персональных данных: {c.privacy_url or 'ссылка не настроена'}")
+    items = [(f"Оферта (версия {c.offer_version})", c.offer_url, "oferta.pdf"),
+             ("Устав клуба", c.charter_url, "ustav.pdf"),
+             ("Правила торгов", c.rules_url, "pravila.pdf"),
+             ("Политика обработки персональных данных", c.privacy_url, "politika-pd.pdf")]
+    out = []
+    for name, url, fname in items:
+        path = Path(c.docs_dir) / fname
+        out.append((name, url, path if path.is_file() else None))
+    return out
+
+
+def legal_links(app: App) -> str:
+    lines = []
+    for name, url, path in legal_docs(app):
+        where = url or ("файл выше" if path else "пока не опубликовано")
+        lines.append(f"• {name}: {where}")
+    return "\n".join(lines)
+
+
+async def send_legal_files(m: Message, app: App) -> None:
+    """Отправить PDF-документы, которые лежат в папке docs (если они есть)."""
+    for name, _url, path in legal_docs(app):
+        if path:
+            await m.answer_document(FSInputFile(path, filename=path.name), caption=name)
 
 
 @router.message(Command("start"))
@@ -111,6 +134,7 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
         return await m.answer("Вы уже зарегистрированы.\n\n" + HELP)
     c = app.config
     channel = f"«{c.channel_name}»" + (f" ({c.channel_url})" if c.channel_url else "")
+    await send_legal_files(m, app)
     await m.answer(
         f"Это клуб SBAID. Основатель — {c.founder_name}. 1 SBAID = 1 голос в его решениях: "
         f"вы решаете, он делает.\n\n"
@@ -120,13 +144,14 @@ async def start(m: Message, user: User, app: App, state: FSMContext):
         "Участвовать могут только совершеннолетние (18+).\n\n"
         "SBAID — единица участия и голоса в клубе. Это не ценная бумага, не доля в имуществе "
         "и не инвестиция, дохода она не гарантирует.\n\n"
-        + legal_links(app),
+        "Прочитайте документы клуба:\n" + legal_links(app),
         reply_markup=markup([[Button("Мне есть 18 лет, принимаю оферту и правила", "reg:offer")]]))
 
 
 @router.message(Command("rules"))
 async def rules(m: Message, app: App):
-    await m.answer(legal_links(app))
+    await send_legal_files(m, app)
+    await m.answer("Документы клуба:\n" + legal_links(app))
 
 
 @router.callback_query(F.data == "reg:offer")

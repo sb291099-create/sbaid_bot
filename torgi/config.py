@@ -26,11 +26,15 @@ class Config:
     total_shares: int = 1_000_000
     # Ключ Fernet для шифрования реквизитов продавцов.
     encryption_key: str = ""
-    # Ссылки на юридические тексты.
+    # Юридические тексты: ссылки (например, Telegraph) и/или PDF-файлы в папке docs_dir
+    # (oferta.pdf, ustav.pdf, pravila.pdf, politika-pd.pdf). Бот отдаёт их любому до
+    # принятия оферты и по команде /rules.
     offer_url: str = ""
     offer_version: str = "1.0"
+    charter_url: str = ""
     rules_url: str = ""
     privacy_url: str = ""
+    docs_dir: str = "docs"
     # Robokassa
     robokassa_login: str = ""
     robokassa_password1: str = ""
@@ -64,8 +68,10 @@ class Config:
             encryption_key=e("ENCRYPTION_KEY", ""),
             offer_url=e("OFFER_URL", ""),
             offer_version=e("OFFER_VERSION", "1.0"),
+            charter_url=e("CHARTER_URL", ""),
             rules_url=e("RULES_URL", ""),
             privacy_url=e("PRIVACY_URL", ""),
+            docs_dir=e("DOCS_DIR", "docs"),
             robokassa_login=e("ROBOKASSA_LOGIN", ""),
             robokassa_password1=e("ROBOKASSA_PASSWORD1", ""),
             robokassa_password2=e("ROBOKASSA_PASSWORD2", ""),
